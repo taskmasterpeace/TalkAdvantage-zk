@@ -1,5 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { getOpenAIClient } from "@/lib/openai-client"
+import OpenAI from "openai"
+
+// Initialize OpenAI client with server-side API key
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+})
 
 // Helper function to replace template variables in prompts
 function replaceTemplateVariables(template: string, variables: Record<string, string>): string {
@@ -14,8 +19,8 @@ export async function POST(request: NextRequest) {
   try {
     const { thought, promptTemplate } = await request.json()
 
-    if (!thought) {
-      return NextResponse.json({ error: "Thought is required" }, { status: 400 })
+    if (!thought || !promptTemplate) {
+      return NextResponse.json({ error: "Missing required parameters" }, { status: 400 })
     }
 
     // Replace template variables
@@ -23,27 +28,25 @@ export async function POST(request: NextRequest) {
       thought,
     })
 
-    // Only get the OpenAI client at runtime
-    const openai = getOpenAIClient()
-
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
       messages: [{ role: "user", content: prompt }],
       temperature: 0.7,
-      max_tokens: 1000,
-      response_format: { type: "json_object" },
+      max_tokens: 500,
     })
 
     const content = response.choices[0]?.message?.content || "{}"
 
-    try {
-      const expansions = JSON.parse(content)
-      return NextResponse.json(expansions)
-    } catch (e) {
-      return NextResponse.json({ error: "Failed to parse expansions response" }, { status: 500 })
-    }
+    // Extract JSON from the response
+    const jsonMatch = content.match(/\{[\s\S]*\}/)
+    const jsonString = jsonMatch ? jsonMatch[0] : "{}"
+
+    // Parse the JSON
+    const expansionData = JSON.parse(jsonString)
+
+    return NextResponse.json(expansionData)
   } catch (error: any) {
-    console.error("Error in expansions endpoint:", error)
+    console.error("Error generating expansions:", error)
     return NextResponse.json({ error: error.message || "Failed to generate expansions" }, { status: 500 })
   }
 }

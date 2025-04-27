@@ -11,7 +11,7 @@ interface MediaPlayerProps {
   audioUrl?: string
 }
 
-export default function MediaPlayer({ showBookmarks = false, audioUrl }: MediaPlayerProps) {
+export function MediaPlayer({ showBookmarks = false, audioUrl }: MediaPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(100)
@@ -168,5 +168,5 @@ export default function MediaPlayer({ showBookmarks = false, audioUrl }: MediaPl
   )
 }
 
-// Add named export
-export { MediaPlayer }
+// Add default export that references the named export
+export default MediaPlayer

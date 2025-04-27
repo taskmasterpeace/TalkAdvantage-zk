@@ -20,7 +20,7 @@ interface Recording {
   isProcessed: boolean
 }
 
-export default function RecordingsList() {
+export function RecordingsList() {
   const [recordings, setRecordings] = useState<Recording[]>([])
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState("")
@@ -169,5 +169,5 @@ export default function RecordingsList() {
   )
 }
 
-// Add named export
-export { RecordingsList }
+// Add default export that references the named export
+export default RecordingsList

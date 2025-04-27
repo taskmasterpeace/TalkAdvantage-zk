@@ -103,5 +103,5 @@ export function RecordingDetails({ recording, audioUrl }: RecordingDetailsProps)
   )
 }
 
-// Change to default export
+// Export as default
 export default RecordingDetails

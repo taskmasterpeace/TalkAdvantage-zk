@@ -1,5 +1,10 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { getOpenAIClient } from "@/lib/openai-client"
+import OpenAI from "openai"
+
+// Initialize OpenAI client with server-side API key
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+})
 
 // Helper function to replace template variables in prompts
 function replaceTemplateVariables(template: string, variables: Record<string, string>): string {
@@ -14,8 +19,8 @@ export async function POST(request: NextRequest) {
   try {
     const { goal, conversationHistory, promptTemplate } = await request.json()
 
-    if (!goal || !conversationHistory) {
-      return NextResponse.json({ error: "Goal and conversation history are required" }, { status: 400 })
+    if (!goal || !conversationHistory || !promptTemplate) {
+      return NextResponse.json({ error: "Missing required parameters" }, { status: 400 })
     }
 
     // Replace template variables
@@ -23,9 +28,6 @@ export async function POST(request: NextRequest) {
       goal,
       conversationHistory,
     })
-
-    // Only get the OpenAI client at runtime
-    const openai = getOpenAIClient()
 
     const response = await openai.chat.completions.create({
       model: "gpt-4o",
@@ -41,11 +43,11 @@ export async function POST(request: NextRequest) {
     const progressValue = progressMatch ? Number.parseFloat(progressMatch[0]) : 0
 
     // Ensure the value is between 0 and 1
-    return NextResponse.json({
-      progress: Math.min(Math.max(progressValue, 0), 1),
-    })
+    const normalizedProgress = Math.min(Math.max(progressValue, 0), 1)
+
+    return NextResponse.json({ progress: normalizedProgress })
   } catch (error: any) {
-    console.error("Error in goal evaluation endpoint:", error)
+    console.error("Error evaluating goal progress:", error)
     return NextResponse.json({ error: error.message || "Failed to evaluate goal progress" }, { status: 500 })
   }
 }

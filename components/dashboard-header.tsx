@@ -4,7 +4,7 @@ import { useState } from "react"
 import { Settings } from "lucide-react"
 import SettingsModal from "./settings-modal"
 
-export default function DashboardHeader() {
+export function DashboardHeader() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
   return (
@@ -34,5 +34,5 @@ export default function DashboardHeader() {
   )
 }
 
-// Add named export
-export { DashboardHeader }
+// Add default export that references the named export
+export default DashboardHeader

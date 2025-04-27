@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 
-export default function TemplateEditor() {
+export function TemplateEditor() {
   const { toast } = useToast()
   const { handleError } = useErrorHandler()
   const templateStore = useTemplateStore()
@@ -377,3 +377,5 @@ export default function TemplateEditor() {
     </div>
   )
 }
+
+export default TemplateEditor

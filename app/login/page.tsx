@@ -31,7 +31,10 @@ export default function LoginPage() {
 
     try {
       await signIn(email, password)
-      router.push(redirectTo)
+      // Add a small delay to ensure auth state is updated
+      setTimeout(() => {
+        router.push(redirectTo)
+      }, 500)
     } catch (error) {
       setError("Invalid email or password")
     } finally {

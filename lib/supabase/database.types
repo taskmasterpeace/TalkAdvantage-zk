@@ -134,7 +134,7 @@ export interface Database {
           time_ms: number
           name: string
           note?: string | null
-          bookmark_type: string
+          bookmark_type?: string
           created_at?: string
         }
         Update: {
@@ -173,9 +173,9 @@ export interface Database {
           system_prompt?: string | null
           template_prompt?: string | null
           curiosity_prompt?: string | null
-          conversation_mode: string
-          is_default: boolean
-          is_builtin: boolean
+          conversation_mode?: string
+          is_default?: boolean
+          is_builtin?: boolean
           created_at?: string
           updated_at?: string
         }
@@ -188,7 +188,7 @@ export interface Database {
           system_prompt?: string | null
           template_prompt?: string | null
           curiosity_prompt?: string | null
-          conversation_mode: string
+          conversation_mode?: string
           is_default?: boolean
           is_builtin?: boolean
           created_at?: string
