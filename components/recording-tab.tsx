@@ -1,0 +1,1278 @@
+"use client"
+
+import type React from "react"
+
+import { useState, useEffect, useRef, useCallback } from "react"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  SelectGroup,
+  SelectLabel,
+} from "@/components/ui/select"
+import { Card } from "@/components/ui/card"
+import { Switch } from "@/components/ui/switch"
+import { Label } from "@/components/ui/label"
+import {
+  Bookmark,
+  Edit,
+  Copy,
+  Play,
+  Pause,
+  Square,
+  Mic,
+  MicOff,
+  RefreshCw,
+  X,
+  MessageSquare,
+  HelpCircle,
+  Save,
+  Download,
+  FileText,
+  Loader2,
+  Plus,
+  Upload,
+  DownloadIcon,
+} from "lucide-react"
+import { useToast } from "@/hooks/use-toast"
+import AudioVisualizer from "./audio-visualizer"
+import ConversationCompass from "./conversation-compass"
+import CuriosityEngine from "./curiosity-engine"
+import AIAnalysisPanel from "./ai-analysis-panel"
+import { useSettingsStore } from "@/lib/settings-store"
+import { useTemplateStore, type AnalyticsProfile } from "@/lib/template-store"
+import { useSessionStore, type TranscriptSegment } from "@/lib/session-store"
+import { useErrorHandler, ErrorType } from "@/lib/error-handler"
+import { ProfileEditorDialog } from "./profile-editor-dialog"
+
+// Add a type for the recording state to improve type safety
+type RecordingState = "idle" | "recording" | "paused"
+
+// Replace the component function with a more organized version
+export default function RecordingTab() {
+  const { toast } = useToast()
+  const { handleError } = useErrorHandler()
+  const settings = useSettingsStore()
+  const templateStore = useTemplateStore()
+  const sessionStore = useSessionStore()
+
+  // Core recording state
+  const [recordingState, setRecordingState] = useState<RecordingState>("idle")
+  const [recordingTime, setRecordingTime] = useState(0)
+  const [isMuted, setIsMuted] = useState(false)
+
+  // Session data
+  const [sessionName, setSessionName] = useState("TalkAdvantage Session")
+  const [isEditingName, setIsEditingName] = useState(false)
+  const [liveText, setLiveText] = useState("")
+  const [editMode, setEditMode] = useState(false)
+
+  // Analysis settings
+  const [analysisInterval, setAnalysisInterval] = useState("manual")
+  const [nextAnalysisTime, setNextAnalysisTime] = useState(0)
+  const [wordCount, setWordCount] = useState(0)
+  const [silenceStartTime, setSilenceStartTime] = useState<number | null>(null)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+
+  // Recording and transcription
+  const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null)
+  const [audioChunks, setAudioChunks] = useState<Blob[]>([])
+  const [isTranscribing, setIsTranscribing] = useState(false)
+  const [transcriptionId, setTranscriptionId] = useState<string | null>(null)
+  const socketRef = useRef<WebSocket | null>(null)
+  const audioStreamRef = useRef<MediaStream | null>(null)
+  const [isConnecting, setIsConnecting] = useState(false)
+
+  // Bookmarks
+  const [bookmarks, setBookmarks] = useState<
+    Array<{
+      time: number
+      name: string
+      note?: string
+    }>
+  >([])
+
+  // Profile Editor State
+  const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false)
+  const [isCreatingNewProfile, setIsCreatingNewProfile] = useState(false)
+
+  // Import/Export file input ref
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Derived state helpers
+  const isRecording = recordingState === "recording"
+  const isPaused = recordingState === "paused"
+  const hasContent = liveText.length > 0
+
+  // Initialize template store
+  useEffect(() => {
+    templateStore.loadDefaultTemplates()
+  }, [])
+
+  // Format time helper function
+  const formatTime = (seconds: number) => {
+    const h = Math.floor(seconds / 3600)
+    const m = Math.floor((seconds % 3600) / 60)
+    const s = seconds % 60
+    return [h, m, s].map((v) => v.toString().padStart(2, "0")).join(":")
+  }
+
+  // Initialize WebSocket connection to AssemblyAI
+  const initializeTranscriptionSocket = async () => {
+    try {
+      setIsConnecting(true)
+
+      // First get a temporary token from our backend
+      const response = await fetch("/api/assemblyai/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: settings.assemblyAIKey }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || "Failed to get token")
+      }
+
+      const { token } = await response.json()
+
+      // Connect to AssemblyAI WebSocket
+      const socket = new WebSocket(`wss://api.assemblyai.com/v2/realtime/ws?token=${token}`)
+
+      socket.onopen = () => {
+        setIsTranscribing(true)
+        setIsConnecting(false)
+        socket.send(
+          JSON.stringify({
+            sample_rate: 16000,
+            word_boost: ["meeting", "project", "deadline", "action item", "follow up"],
+            punctuate: true,
+            format_text: true,
+            speaker_labels: true,
+          }),
+        )
+
+        toast({
+          title: "Transcription Connected",
+          description: "Real-time transcription is now active.",
+        })
+      }
+
+      socket.onmessage = (message) => {
+        const data = JSON.parse(message.data)
+        if (data.message_type === "FinalTranscript") {
+          // Update transcript in UI
+          setLiveText((prev) => prev + " " + data.text)
+          setWordCount((prev) => prev + data.text.split(" ").length)
+
+          // Add to session store
+          const segment: TranscriptSegment = {
+            speaker: data.speaker || "A",
+            start_ms: data.audio_start,
+            end_ms: data.audio_end,
+            text: data.text,
+          }
+          sessionStore.addTranscriptSegment(segment)
+        }
+      }
+
+      socket.onerror = (error) => {
+        console.error("WebSocket error:", error)
+        handleError(ErrorType.TRANSCRIPTION, "Connection to transcription service failed", {
+          retry: initializeTranscriptionSocket,
+        })
+      }
+
+      socket.onclose = () => {
+        setIsTranscribing(false)
+        setIsConnecting(false)
+      }
+
+      socketRef.current = socket
+    } catch (error) {
+      setIsConnecting(false)
+      handleError(ErrorType.TRANSCRIPTION, error instanceof Error ? error.message : "Unknown error", {
+        retry: initializeTranscriptionSocket,
+      })
+    }
+  }
+
+  // Recording control functions
+  const startRecording = useCallback(async () => {
+    try {
+      // Create a new session
+      const activeTemplate = templateStore.activeTemplate
+      sessionStore.startNewSession(sessionName, activeTemplate)
+
+      // Get microphone access
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      audioStreamRef.current = stream
+
+      const recorder = new MediaRecorder(stream)
+
+      // Set up event handlers
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          setAudioChunks((prev) => [...prev, e.data])
+
+          // Send audio chunk to AssemblyAI via WebSocket
+          if (socketRef.current?.readyState === WebSocket.OPEN && !isMuted) {
+            // Convert blob to base64 and send
+            const reader = new FileReader()
+            reader.readAsDataURL(e.data)
+            reader.onloadend = () => {
+              const base64data = reader.result?.toString().split(",")[1]
+              if (base64data) {
+                socketRef.current?.send(JSON.stringify({ audio_data: base64data }))
+              }
+            }
+          }
+        }
+      }
+
+      // Start recording
+      recorder.start(500) // Collect data every 500ms
+      setMediaRecorder(recorder)
+      setRecordingState("recording")
+      setRecordingTime(0)
+      setLiveText("")
+      setWordCount(0)
+      setSilenceStartTime(null)
+      resetAnalysisTimer()
+      setAudioChunks([])
+
+      // Initialize WebSocket connection to AssemblyAI
+      await initializeTranscriptionSocket()
+
+      toast({
+        title: "Recording Started",
+        description: "Your session is now being recorded.",
+      })
+    } catch (error) {
+      handleError(ErrorType.RECORDING, error instanceof Error ? error.message : "Unknown error", {
+        details: "Could not access microphone. Please check permissions.",
+      })
+    }
+  }, [sessionName, templateStore.activeTemplate, isMuted, toast])
+
+  const pauseRecording = useCallback(() => {
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+      mediaRecorder.pause()
+    }
+
+    setRecordingState("paused")
+
+    toast({
+      title: "Recording Paused",
+      description: "Your recording has been paused. Press play to continue.",
+    })
+  }, [mediaRecorder, toast])
+
+  const resumeRecording = useCallback(() => {
+    if (mediaRecorder && mediaRecorder.state === "paused") {
+      mediaRecorder.resume()
+    }
+
+    setRecordingState("recording")
+
+    toast({
+      title: "Recording Resumed",
+      description: "Your recording has been resumed.",
+    })
+  }, [mediaRecorder, toast])
+
+  const stopRecording = useCallback(() => {
+    if (recordingState === "idle") return
+
+    // Stop media recorder
+    if (mediaRecorder) {
+      if (mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop()
+      }
+      setMediaRecorder(null)
+    }
+
+    // Close WebSocket connection
+    if (socketRef.current) {
+      socketRef.current.close()
+      socketRef.current = null
+    }
+
+    // Stop audio tracks
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((track) => track.stop())
+      audioStreamRef.current = null
+    }
+
+    // Create audio blob and save to session
+    if (audioChunks.length > 0) {
+      const audioBlob = new Blob(audioChunks, { type: "audio/webm" })
+      sessionStore.setAudioBlob(audioBlob)
+    }
+
+    // End current session
+    sessionStore.endCurrentSession()
+
+    setRecordingState("idle")
+    setIsTranscribing(false)
+
+    toast({
+      title: "Recording Stopped",
+      description: "Your recording has been stopped and saved.",
+    })
+  }, [recordingState, mediaRecorder, audioChunks, sessionStore, toast])
+
+  // Analysis functions
+  const resetAnalysisTimer = useCallback(() => {
+    if (analysisInterval.startsWith("time-")) {
+      const seconds = Number.parseInt(analysisInterval.split("-")[1])
+      setNextAnalysisTime(seconds)
+    } else {
+      setNextAnalysisTime(0)
+    }
+  }, [analysisInterval])
+
+  const triggerManualAnalysis = useCallback(() => {
+    if (!isRecording && !hasContent) return
+
+    toast({
+      title: "Analysis Triggered",
+      description: "Processing your conversation...",
+    })
+
+    // Get the active template
+    const activeTemplateName = templateStore.activeTemplate
+    const activeTemplate = templateStore.templates.find((t) => t.name === activeTemplateName)
+
+    if (!activeTemplate) {
+      toast({
+        variant: "destructive",
+        title: "Template Error",
+        description: "No active template found for analysis.",
+      })
+      return
+    }
+
+    // Use the template for analysis
+    const transcriptText = sessionStore.getFullTranscriptText() || liveText
+
+    if (!transcriptText) {
+      toast({
+        variant: "destructive",
+        title: "No Content",
+        description: "There is no transcript to analyze.",
+      })
+      return
+    }
+
+    // Simulate analysis processing with the template
+    setIsAnalyzing(true)
+
+    // In a real implementation, this would call the API with the template
+    setTimeout(() => {
+      setIsAnalyzing(false)
+      toast({
+        title: "Analysis Complete",
+        description: `Your conversation has been analyzed using the "${activeTemplate.name}" template.`,
+      })
+      resetAnalysisTimer()
+
+      // Update session with analysis results
+      sessionStore.updateAnalysisResults({
+        template_used: activeTemplate.name,
+        analysis_timestamp: new Date().toISOString(),
+      })
+    }, 1500)
+  }, [isRecording, hasContent, templateStore, sessionStore, liveText, toast, resetAnalysisTimer])
+
+  const updateAnalysisTimer = useCallback(() => {
+    if (!isRecording) return
+
+    if (analysisInterval.startsWith("time-")) {
+      const seconds = Number.parseInt(analysisInterval.split("-")[1])
+      if (nextAnalysisTime <= 0) {
+        triggerManualAnalysis()
+        setNextAnalysisTime(seconds)
+      } else {
+        setNextAnalysisTime((prev) => prev - 1)
+      }
+    }
+  }, [isRecording, analysisInterval, nextAnalysisTime, triggerManualAnalysis])
+
+  // Session management functions
+  const saveSession = useCallback(() => {
+    if (!hasContent && recordingState === "idle") {
+      toast({
+        variant: "destructive",
+        title: "Nothing to Save",
+        description: "Start recording or create content before saving.",
+      })
+      return
+    }
+
+    // If recording is in progress, stop it first
+    if (recordingState !== "idle") {
+      stopRecording()
+    }
+
+    // Save the session
+    sessionStore.saveSession()
+
+    toast({
+      title: "Session Saved",
+      description: `"${sessionName}" has been saved successfully.`,
+    })
+  }, [hasContent, recordingState, sessionName, sessionStore, stopRecording, toast])
+
+  const newSession = useCallback(() => {
+    if (recordingState !== "idle") {
+      toast({
+        variant: "destructive",
+        title: "Recording in Progress",
+        description: "Please stop recording before starting a new session.",
+      })
+      return
+    }
+
+    setSessionName("TalkAdvantage Session")
+    setRecordingTime(0)
+    setLiveText("")
+    setWordCount(0)
+    setBookmarks([])
+
+    toast({
+      title: "New Session Created",
+      description: "Ready to start recording.",
+    })
+  }, [recordingState, toast])
+
+  const saveTranscript = useCallback(() => {
+    if (!liveText) {
+      toast({
+        variant: "destructive",
+        title: "No Transcript",
+        description: "There is no transcript to save.",
+      })
+      return
+    }
+
+    // In a real implementation, this would save to a file or database
+    const blob = new Blob([liveText], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `${sessionName.replace(/\s+/g, "-").toLowerCase()}-transcript.txt`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+
+    toast({
+      title: "Transcript Saved",
+      description: "Your transcript has been downloaded.",
+    })
+  }, [liveText, sessionName, toast])
+
+  const copyToClipboard = useCallback(() => {
+    if (!liveText) {
+      toast({
+        variant: "destructive",
+        title: "Nothing to Copy",
+        description: "There is no text to copy to clipboard.",
+      })
+      return
+    }
+
+    navigator.clipboard.writeText(liveText).then(
+      () => {
+        toast({
+          title: "Copied to Clipboard",
+          description: "Transcript text has been copied to clipboard.",
+        })
+      },
+      (err) => {
+        console.error("Could not copy text: ", err)
+        toast({
+          variant: "destructive",
+          title: "Copy Failed",
+          description: "Failed to copy text to clipboard.",
+        })
+      },
+    )
+  }, [liveText, toast])
+
+  const addBookmark = useCallback(
+    (named = false) => {
+      if (!isRecording) {
+        toast({
+          variant: "destructive",
+          title: "Not Recording",
+          description: "You can only add bookmarks while recording.",
+        })
+        return
+      }
+
+      const bookmarkName = named ? `Bookmark at ${formatTime(recordingTime)}` : undefined
+
+      // Add to local state
+      const newBookmark = {
+        time: recordingTime,
+        name: bookmarkName || "Quick Bookmark",
+        note: "",
+      }
+      setBookmarks((prev) => [...prev, newBookmark])
+
+      // Add to session store
+      sessionStore.addBookmark({
+        time_ms: recordingTime * 1000,
+        type: "marker",
+        name: bookmarkName || "Quick Bookmark",
+        note: "",
+      })
+
+      toast({
+        title: "Bookmark Added",
+        description: bookmarkName || `Bookmark added at ${formatTime(recordingTime)}`,
+      })
+    },
+    [isRecording, recordingTime, sessionStore, toast],
+  )
+
+  // Profile import/export functions
+  const exportProfiles = () => {
+    try {
+      const profiles = templateStore.templates.filter((p) => !p.name.startsWith("*"))
+      if (profiles.length === 0) {
+        toast({
+          variant: "destructive",
+          title: "No Custom Profiles",
+          description: "You don't have any custom profiles to export.",
+        })
+        return
+      }
+
+      const dataStr = JSON.stringify(profiles, null, 2)
+      const blob = new Blob([dataStr], { type: "application/json" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = "talkadvantage-profiles.json"
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+
+      toast({
+        title: "Profiles Exported",
+        description: `Exported ${profiles.length} custom profiles.`,
+      })
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Export Failed",
+        description: error instanceof Error ? error.message : "An unknown error occurred",
+      })
+    }
+  }
+
+  const importProfiles = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click()
+    }
+  }
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0]
+      const reader = new FileReader()
+
+      reader.onload = (event) => {
+        try {
+          const content = event.target?.result as string
+          const profiles = JSON.parse(content) as AnalyticsProfile[]
+
+          if (!Array.isArray(profiles)) {
+            throw new Error("Invalid profile format")
+          }
+
+          let importCount = 0
+          profiles.forEach((profile) => {
+            // Make sure we don't overwrite built-in profiles
+            if (!profile.name.startsWith("*")) {
+              // Check if profile with this name already exists
+              const existingProfile = templateStore.templates.find((p) => p.name === profile.name)
+              if (existingProfile) {
+                // Add a suffix to avoid name conflicts
+                profile.name = `${profile.name} (Imported)`
+              }
+
+              templateStore.addTemplate(profile)
+              importCount++
+            }
+          })
+
+          toast({
+            title: "Profiles Imported",
+            description: `Successfully imported ${importCount} profiles.`,
+          })
+        } catch (error) {
+          toast({
+            variant: "destructive",
+            title: "Import Failed",
+            description: "The selected file contains invalid profile data.",
+          })
+        }
+      }
+
+      reader.readAsText(file)
+
+      // Reset the input
+      e.target.value = ""
+    }
+  }
+
+  // Timer effect for recording
+  useEffect(() => {
+    let interval: NodeJS.Timeout
+
+    if (isRecording) {
+      interval = setInterval(() => {
+        setRecordingTime((prev) => prev + 1)
+        updateAnalysisTimer()
+      }, 1000)
+    }
+
+    return () => clearInterval(interval)
+  }, [isRecording, updateAnalysisTimer])
+
+  // Keyboard shortcuts effect
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // F12 for manual analysis
+      if (e.key === "F12" && isRecording && analysisInterval === "manual") {
+        e.preventDefault()
+        triggerManualAnalysis()
+      }
+
+      // F8 for quick bookmark
+      if (e.key === "F8" && isRecording) {
+        e.preventDefault()
+        addBookmark(false)
+      }
+
+      // F9 for named bookmark
+      if (e.key === "F9" && isRecording) {
+        e.preventDefault()
+        addBookmark(true)
+      }
+
+      // Space to toggle recording (when not in an input field)
+      if (e.key === " " && e.target === document.body) {
+        e.preventDefault()
+        if (recordingState === "idle") {
+          startRecording()
+        } else if (recordingState === "recording") {
+          pauseRecording()
+        } else if (recordingState === "paused") {
+          resumeRecording()
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [
+    isRecording,
+    analysisInterval,
+    triggerManualAnalysis,
+    addBookmark,
+    recordingState,
+    startRecording,
+    pauseRecording,
+    resumeRecording,
+  ])
+
+  // Cleanup effect
+  useEffect(() => {
+    return () => {
+      // Clean up on component unmount
+      if (socketRef.current) {
+        socketRef.current.close()
+      }
+
+      if (audioStreamRef.current) {
+        audioStreamRef.current.getTracks().forEach((track) => track.stop())
+      }
+    }
+  }, [])
+
+  return (
+    <div className="space-y-6">
+      {/* Top Section */}
+      <div className="space-y-4">
+        {/* Header Row */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          {/* Session Name Field */}
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <Input
+              value={sessionName}
+              onChange={(e) => setSessionName(e.target.value)}
+              className="text-lg font-medium"
+              placeholder="Session Name"
+              onFocus={() => setIsEditingName(true)}
+              onBlur={() => setIsEditingName(false)}
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => {
+                const input = document.querySelector("input") as HTMLInputElement
+                input.focus()
+              }}
+              aria-label="Edit session name"
+            >
+              <Edit className="h-4 w-4" />
+            </Button>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={saveSession}>
+              <Save className="h-4 w-4 mr-2" />
+              Save Session
+            </Button>
+            <Button variant="outline" size="sm" onClick={newSession}>
+              <RefreshCw className="h-4 w-4 mr-2" />
+              New Session
+            </Button>
+          </div>
+        </div>
+
+        {/* Control Panels */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Recording Controls Panel */}
+          <Card className="p-2">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {/* Record/Pause button */}
+                  <Button
+                    variant={isRecording ? "destructive" : "default"}
+                    size="icon"
+                    onClick={() => {
+                      if (recordingState === "idle") {
+                        startRecording()
+                      } else if (recordingState === "recording") {
+                        pauseRecording()
+                      } else if (recordingState === "paused") {
+                        resumeRecording()
+                      }
+                    }}
+                    className="h-10 w-10 rounded-full"
+                    aria-label={isRecording ? "Pause recording" : "Start recording"}
+                    disabled={isConnecting}
+                  >
+                    {isConnecting ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                    ) : isRecording ? (
+                      <Pause className="h-5 w-5" />
+                    ) : (
+                      <Play className="h-5 w-5" />
+                    )}
+                  </Button>
+
+                  {/* Stop button */}
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    disabled={recordingState === "idle" || isConnecting}
+                    onClick={stopRecording}
+                    className="h-10 w-10 rounded-full"
+                    aria-label="Stop recording"
+                  >
+                    <Square className="h-5 w-5" />
+                  </Button>
+
+                  {/* Mute button */}
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setIsMuted(!isMuted)}
+                    className={`h-10 w-10 rounded-full ${isMuted ? "bg-red-100 dark:bg-red-900/20 text-red-500 dark:text-red-400" : ""}`}
+                    aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
+                    disabled={recordingState === "idle" || isConnecting}
+                  >
+                    {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                  </Button>
+                </div>
+
+                {/* Recording timer */}
+                <div className="text-xl font-mono">{formatTime(recordingTime)}</div>
+
+                {/* Analysis timer */}
+                <div className="flex flex-col items-end">
+                  <div className="text-sm text-muted-foreground">Next analysis in:</div>
+                  <div className="text-md font-mono">{formatTime(nextAnalysisTime)}</div>
+                </div>
+
+                <div className="w-24 h-10">
+                  <AudioVisualizer isActive={isRecording && !isMuted} />
+                </div>
+              </div>
+
+              {/* Analysis interval settings */}
+              <div className="flex items-center justify-between mt-2">
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="analysis-interval" className="text-sm">
+                    Analysis interval:
+                  </Label>
+                  <Select value={analysisInterval} onValueChange={setAnalysisInterval}>
+                    <SelectTrigger id="analysis-interval" className="w-[180px] h-8">
+                      <SelectValue placeholder="Select interval" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="manual">Manual (F12)</SelectItem>
+                      <SelectGroup>
+                        <SelectLabel>Silence</SelectLabel>
+                        <SelectItem value="silence-5">5 seconds silence</SelectItem>
+                        <SelectItem value="silence-15">15 seconds silence</SelectItem>
+                        <SelectItem value="silence-30">30 seconds silence</SelectItem>
+                      </SelectGroup>
+                      <SelectGroup>
+                        <SelectLabel>Word Count</SelectLabel>
+                        <SelectItem value="words-10">10 words</SelectItem>
+                        <SelectItem value="words-50">50 words</SelectItem>
+                        <SelectItem value="words-100">100 words</SelectItem>
+                        <SelectItem value="words-200">200 words</SelectItem>
+                        <SelectItem value="words-500">500 words</SelectItem>
+                      </SelectGroup>
+                      <SelectGroup>
+                        <SelectLabel>Time</SelectLabel>
+                        <SelectItem value="time-10">10 seconds</SelectItem>
+                        <SelectItem value="time-45">45 seconds</SelectItem>
+                        <SelectItem value="time-300">5 minutes</SelectItem>
+                        <SelectItem value="time-600">10 minutes</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!isRecording || analysisInterval !== "manual" || isConnecting}
+                    onClick={triggerManualAnalysis}
+                  >
+                    Analyze Now (F12)
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          {/* Analysis Tools Panel */}
+          <Card className="p-2">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <div className="flex flex-col w-full">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Label className="text-sm font-medium">Analytics Profile:</Label>
+                    <div className="text-xs text-muted-foreground ml-auto">
+                      {templateStore.templates.find((t) => t.name === templateStore.activeTemplate)?.description ||
+                        "Select a profile"}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Select value={templateStore.activeTemplate} onValueChange={templateStore.setActiveTemplate}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select Analytics Profile" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectLabel>Built-in Profiles</SelectLabel>
+                          {templateStore.templates
+                            .filter((template) => template.name.startsWith("*"))
+                            .map((template) => (
+                              <SelectItem key={template.name} value={template.name}>
+                                {template.name.substring(1)}
+                              </SelectItem>
+                            ))}
+                        </SelectGroup>
+                        <SelectGroup>
+                          <SelectLabel>Custom Profiles</SelectLabel>
+                          {templateStore.templates
+                            .filter((template) => !template.name.startsWith("*"))
+                            .map((template) => (
+                              <SelectItem key={template.name} value={template.name}>
+                                {template.name}
+                              </SelectItem>
+                            ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => {
+                        const activeTemplate = templateStore.templates.find(
+                          (t) => t.name === templateStore.activeTemplate,
+                        )
+
+                        if (!activeTemplate) {
+                          toast({
+                            variant: "destructive",
+                            title: "Profile Error",
+                            description: "Could not find the selected analytics profile.",
+                          })
+                          return
+                        }
+
+                        // Open the ProfileEditorDialog
+                        setIsProfileEditorOpen(true)
+                      }}
+                    >
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => {
+                        const currentTemplate = templateStore.templates.find(
+                          (t) => t.name === templateStore.activeTemplate,
+                        )
+
+                        if (!currentTemplate) {
+                          toast({
+                            variant: "destructive",
+                            title: "Profile Error",
+                            description: "Could not find the selected analytics profile.",
+                          })
+                          return
+                        }
+
+                        // Create a duplicate of the current profile
+                        const newTemplate = {
+                          ...currentTemplate,
+                          name: `Copy of ${currentTemplate.name.startsWith("*") ? currentTemplate.name.substring(1) : currentTemplate.name}`,
+                          description: `Custom copy of ${currentTemplate.description}`,
+                        }
+
+                        templateStore.addTemplate(newTemplate)
+                        templateStore.setActiveTemplate(newTemplate.name)
+
+                        toast({
+                          title: "Profile Duplicated",
+                          description: `Created new analytics profile "${newTemplate.name}"`,
+                        })
+                      }}
+                    >
+                      <Copy className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => {
+                        setIsCreatingNewProfile(true)
+                        setIsProfileEditorOpen(true)
+                      }}
+                      title="Create new profile"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                    <div className="flex gap-1">
+                      <Button variant="outline" size="icon" onClick={importProfiles} title="Import profiles">
+                        <Upload className="h-4 w-4" />
+                      </Button>
+                      <Button variant="outline" size="icon" onClick={exportProfiles} title="Export profiles">
+                        <DownloadIcon className="h-4 w-4" />
+                      </Button>
+                      <input
+                        type="file"
+                        ref={fileInputRef}
+                        onChange={handleFileChange}
+                        accept=".json"
+                        className="hidden"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!hasContent}
+                    onClick={() => {
+                      toast({
+                        title: "Processing Content",
+                        description: "Your content is being processed...",
+                      })
+                    }}
+                  >
+                    Process
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!hasContent}
+                    onClick={() => {
+                      toast({
+                        title: "Full Analysis",
+                        description: "Running full analysis on your content...",
+                      })
+                    }}
+                  >
+                    Full Analysis
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!hasContent}
+                    onClick={() => {
+                      toast({
+                        title: "Deep Analysis",
+                        description: "Running deep analysis on your content...",
+                      })
+                    }}
+                  >
+                    Deep Analysis
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      toast({
+                        title: "Refreshing Analysis",
+                        description: "Analysis tools are being refreshed.",
+                      })
+                    }}
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => {
+                      toast({
+                        title: "Analysis Cleared",
+                        description: "All analysis results have been cleared.",
+                      })
+                    }}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      {/* Main Content Area */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Left Panel: Live Text */}
+        <Card className="overflow-hidden">
+          <div className="bg-muted p-2 flex items-center justify-between">
+            <h3 className="font-medium">Live Text</h3>
+            <div className="flex items-center gap-2">
+              <Select defaultValue="default">
+                <SelectTrigger className="w-[100px] h-8">
+                  <SelectValue placeholder="Font" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">Default</SelectItem>
+                  <SelectItem value="large">Large</SelectItem>
+                  <SelectItem value="small">Small</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={copyToClipboard}
+                disabled={!hasContent}
+                aria-label="Copy to clipboard"
+              >
+                <Copy className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={saveTranscript}
+                disabled={!hasContent}
+                aria-label="Download transcript"
+              >
+                <Download className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+          <div className="p-4 h-[400px] overflow-y-auto">
+            {liveText ? (
+              <div className="space-y-4">
+                {liveText
+                  .split(".")
+                  .filter(Boolean)
+                  .map((sentence, idx) => (
+                    <div key={idx} className="flex items-start gap-2">
+                      <span className="text-xs text-muted-foreground font-mono mt-1">{formatTime(idx * 5)}</span>
+                      <p>{sentence.trim()}.</p>
+                    </div>
+                  ))}
+              </div>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                {isRecording ? (
+                  "Waiting for speech..."
+                ) : (
+                  <>
+                    <FileText className="h-12 w-12 mb-4 opacity-20" />
+                    <p>Start recording to see transcription</p>
+                    <p className="text-sm mt-2">Press the play button or spacebar to begin</p>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </Card>
+
+        {/* Right Panel: Tabbed Interface */}
+        <Card className="overflow-hidden">
+          <Tabs defaultValue="insights">
+            <div className="bg-muted p-2">
+              <TabsList className="grid w-full grid-cols-3">
+                <TabsTrigger value="insights">AI Insights</TabsTrigger>
+                <TabsTrigger value="curiosity">Curiosity Engine</TabsTrigger>
+                <TabsTrigger value="compass">Conversation Compass</TabsTrigger>
+              </TabsList>
+            </div>
+
+            <TabsContent value="insights" className="p-4 h-[400px] overflow-y-auto">
+              {hasContent ? (
+                <AIAnalysisPanel transcript={liveText} />
+              ) : (
+                <div className="h-full flex items-center justify-center text-muted-foreground">
+                  No insights available yet
+                </div>
+              )}
+            </TabsContent>
+
+            <TabsContent value="curiosity" className="h-[400px] overflow-y-auto">
+              <CuriosityEngine hasContent={hasContent} transcript={liveText} />
+            </TabsContent>
+
+            <TabsContent value="compass" className="h-[400px] overflow-y-auto">
+              <ConversationCompass hasContent={hasContent} />
+            </TabsContent>
+          </Tabs>
+        </Card>
+      </div>
+
+      {/* Bottom Controls */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Switch id="edit-mode" checked={editMode} onCheckedChange={setEditMode} />
+            <Label htmlFor="edit-mode">Edit Mode</Label>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" disabled={!hasContent} onClick={saveTranscript}>
+            <Save className="h-4 w-4 mr-2" />
+            Save Transcript
+          </Button>
+          <Button
+            variant="outline"
+            disabled={!hasContent}
+            onClick={() => {
+              toast({
+                title: "Analysis Saved",
+                description: "Your analysis has been saved successfully.",
+              })
+            }}
+          >
+            <Save className="h-4 w-4 mr-2" />
+            Save Analysis
+          </Button>
+        </div>
+      </div>
+
+      {/* Bookmark Panel */}
+      <Card className="p-4">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-medium">Bookmarks</h3>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              toast({
+                title: "Voice Commands",
+                description: "Voice command functionality will be available in a future update.",
+              })
+            }}
+          >
+            <MessageSquare className="h-4 w-4 mr-2" />
+            Voice Commands
+          </Button>
+        </div>
+        <div className="flex items-center gap-2 mb-4">
+          <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(false)}>
+            <Bookmark className="h-4 w-4 mr-2" />
+            Quick Bookmark (F8)
+          </Button>
+          <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(true)}>
+            <Bookmark className="h-4 w-4 mr-2" />
+            Named Bookmark (F9)
+          </Button>
+          <Button variant="outline" disabled={!isRecording} onClick={triggerManualAnalysis}>
+            <HelpCircle className="h-4 w-4 mr-2" />
+            Full Analysis (F10)
+          </Button>
+        </div>
+
+        {bookmarks.length > 0 ? (
+          <div className="space-y-2">
+            {bookmarks.map((bookmark, index) => (
+              <div key={index} className="flex items-center justify-between p-2 border rounded-md">
+                <div className="flex items-center gap-2">
+                  <Bookmark className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium">{bookmark.name}</span>
+                  <span className="text-xs text-muted-foreground">{formatTime(bookmark.time)}</span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setBookmarks(bookmarks.filter((_, i) => i !== index))
+                  }}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-center text-muted-foreground py-4">No bookmarks yet</div>
+        )}
+      </Card>
+      <ProfileEditorDialog
+        open={isProfileEditorOpen}
+        onOpenChange={(open) => {
+          setIsProfileEditorOpen(open)
+          if (!open) setIsCreatingNewProfile(false)
+        }}
+        profileName={isCreatingNewProfile ? undefined : templateStore.activeTemplate}
+        isCreatingNew={isCreatingNewProfile}
+      />
+    </div>
+  )
+}
