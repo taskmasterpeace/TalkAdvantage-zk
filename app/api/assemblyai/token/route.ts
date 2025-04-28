@@ -3,12 +3,10 @@ import { generateRealtimeToken } from "@/lib/assemblyai"
 
 export async function POST(request: Request) {
   try {
-    const { apiKey } = await request.json()
-
+    const apiKey = process.env.ASSEMBLYAI_API_KEY
     if (!apiKey) {
-      return NextResponse.json({ error: "API key is required" }, { status: 400 })
+      return NextResponse.json({ error: "Server: ASSEMBLYAI_API_KEY not set" }, { status: 500 })
     }
-
     try {
       const token = await generateRealtimeToken(apiKey)
       return NextResponse.json({ token })

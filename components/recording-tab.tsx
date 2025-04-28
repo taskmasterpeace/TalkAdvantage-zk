@@ -49,6 +49,7 @@ import { useTemplateStore, type AnalyticsProfile } from "@/lib/template-store"
 import { useSessionStore, type TranscriptSegment } from "@/lib/session-store"
 import { useErrorHandler, ErrorType } from "@/lib/error-handler"
 import { ProfileEditorDialog } from "./profile-editor-dialog"
+import { AssemblyAI } from "assemblyai"
 
 // Add a type for the recording state to improve type safety
 type RecordingState = "idle" | "recording" | "paused"
@@ -84,9 +85,34 @@ export default function RecordingTab() {
   const [audioChunks, setAudioChunks] = useState<Blob[]>([])
   const [isTranscribing, setIsTranscribing] = useState(false)
   const [transcriptionId, setTranscriptionId] = useState<string | null>(null)
-  const socketRef = useRef<WebSocket | null>(null)
+  const transcriberRef = useRef<ReturnType<AssemblyAI["realtime"]["transcriber"]> | null>(null)
   const audioStreamRef = useRef<MediaStream | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null)
+  const audioAnalyzerRef = useRef<AnalyserNode | null>(null)
+  const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null)
   const [isConnecting, setIsConnecting] = useState(false)
+
+  // Helper to convert Float32 samples to 16-bit PCM
+  const floatTo16BitPCM = (input: Float32Array) => {
+    const output = new Int16Array(input.length)
+    for (let i = 0; i < input.length; i++) {
+      const s = Math.max(-1, Math.min(1, input[i]))
+      output[i] = s < 0 ? s * 0x8000 : s * 0x7fff
+    }
+    return output
+  }
+
+  // Helper to convert ArrayBuffer to Base64 string
+  function arrayBufferToBase64(buffer: ArrayBuffer): string {
+    let binary = ""
+    const bytes = new Uint8Array(buffer)
+    const len = bytes.byteLength
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i])
+    }
+    return window.btoa(binary)
+  }
 
   // Bookmarks
   const [bookmarks, setBookmarks] = useState<
@@ -122,123 +148,169 @@ export default function RecordingTab() {
     return [h, m, s].map((v) => v.toString().padStart(2, "0")).join(":")
   }
 
-  // Initialize WebSocket connection to AssemblyAI
-  const initializeTranscriptionSocket = async () => {
+  // Reset the analysis timer based on the selected interval
+  const resetAnalysisTimer = useCallback(() => {
+    if (analysisInterval.startsWith("time-")) {
+      const seconds = Number.parseInt(analysisInterval.split("-")[1])
+      setNextAnalysisTime(seconds)
+    } else {
+      setNextAnalysisTime(0)
+    }
+  }, [analysisInterval])
+
+  // Initialize AssemblyAI transcription
+  const initializeTranscription = useCallback(async () => {
     try {
       setIsConnecting(true)
 
-      // First get a temporary token from our backend
+      // Get token from your API endpoint
       const response = await fetch("/api/assemblyai/token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: settings.assemblyAIKey }),
       })
 
       if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.error || "Failed to get token")
+        const { error } = await response.json()
+        throw new Error(error || "Failed to get token")
       }
 
       const { token } = await response.json()
+      if (!token) {
+        throw new Error("Temporary token missing from response")
+      }
 
-      // Connect to AssemblyAI WebSocket
-      const socket = new WebSocket(`wss://api.assemblyai.com/v2/realtime/ws?token=${token}`)
+      // Create the AssemblyAI client using the SDK
+      const client = new AssemblyAI({ apiKey: token })
 
-      socket.onopen = () => {
+      // Create a real-time transcriber with the correct sample rate
+      const transcriber = client.realtime.transcriber({
+        sampleRate: 16000,
+        token,
+      })
+
+      // Set up transcriber event handlers
+      transcriber.on("open", (data: any) => {
+        const { sessionId } = data
+        console.log(`AssemblyAI session opened with ID: ${sessionId}`)
         setIsTranscribing(true)
         setIsConnecting(false)
-        socket.send(
-          JSON.stringify({
-            sample_rate: 16000,
-            word_boost: ["meeting", "project", "deadline", "action item", "follow up"],
-            punctuate: true,
-            format_text: true,
-            speaker_labels: true,
-          }),
-        )
 
         toast({
           title: "Transcription Connected",
           description: "Real-time transcription is now active.",
         })
-      }
+      })
 
-      socket.onmessage = (message) => {
-        const data = JSON.parse(message.data)
-        if (data.message_type === "FinalTranscript") {
-          // Update transcript in UI
-          setLiveText((prev) => prev + " " + data.text)
-          setWordCount((prev) => prev + data.text.split(" ").length)
+      transcriber.on("transcript", (transcript: any) => {
+        if (!transcript.text || transcript.message_type !== "FinalTranscript") return
+        console.log(`AssemblyAI FinalTranscript:`, transcript.text)
+        // Append final transcript segment to live text
+        setLiveText((prev) => `${prev}${prev ? " " : ""}${transcript.text}`)
+        // Update word count
+        const words = transcript.text.split(/\s+/).length
+        setWordCount(words)
+        // Store segment in session
+        sessionStore.addTranscriptSegment(transcript.text)
+      })
 
-          // Add to session store
-          const segment: TranscriptSegment = {
-            speaker: data.speaker || "A",
-            start_ms: data.audio_start,
-            end_ms: data.audio_end,
-            text: data.text,
-          }
-          sessionStore.addTranscriptSegment(segment)
-        }
-      }
-
-      socket.onerror = (error) => {
-        console.error("WebSocket error:", error)
-        handleError(ErrorType.TRANSCRIPTION, "Connection to transcription service failed", {
-          retry: initializeTranscriptionSocket,
+      transcriber.on("error", (error: any) => {
+        console.error("AssemblyAI transcriber error:", error)
+        handleError(ErrorType.TRANSCRIPTION, error.message || "Transcription error", {
+          details: "Error from transcription service",
         })
-      }
+      })
 
-      socket.onclose = () => {
+      transcriber.on("close", (code: number, reason: string) => {
+        console.log(`AssemblyAI session closed: ${code} ${reason}`)
         setIsTranscribing(false)
-        setIsConnecting(false)
-      }
+      })
 
-      socketRef.current = socket
+      // Connect to the service
+      console.log("Connecting to AssemblyAI real-time service...")
+      await transcriber.connect()
+
+      // Save references
+      transcriberRef.current = transcriber
     } catch (error) {
+      console.error("Error initializing transcription:", error)
       setIsConnecting(false)
       handleError(ErrorType.TRANSCRIPTION, error instanceof Error ? error.message : "Unknown error", {
-        retry: initializeTranscriptionSocket,
+        details: "Could not initialize transcription",
       })
     }
-  }
+  }, [handleError, toast, setIsConnecting, setIsTranscribing, setLiveText, setWordCount, sessionStore])
 
   // Recording control functions
   const startRecording = useCallback(async () => {
+    console.log("startRecording function called") // Log start of function
+    let currentStep = "Checking mediaDevices support"
     try {
+      currentStep = "Checking mediaDevices support"
+      console.log(`[1/9] ${currentStep}`)
+      // Detailed debug information
+      console.log("navigator defined:", typeof navigator !== "undefined")
+      console.log("navigator.mediaDevices:", navigator?.mediaDevices ? "exists" : "does not exist")
+      console.log("navigator.mediaDevices.getUserMedia:", typeof navigator?.mediaDevices?.getUserMedia === "function" ? "exists" : "does not exist")
+
+      // More graceful detection that works around some browser quirks
+      if (typeof navigator === "undefined") {
+        console.error("Navigator is undefined - not in a browser environment")
+        toast({
+          variant: "destructive",
+          title: "Unsupported Browser",
+          description: "Your browser environment does not support recording.",
+        })
+        return
+      }
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        console.error("Microphone API not available. Please check:")
+        console.error("• Browser permissions (look for camera/mic icon in address bar)")
+        console.error("• Privacy extensions or settings blocking media access")
+        console.error("• Try a different browser (Chrome or Edge recommended)")
+
+        toast({
+          variant: "destructive",
+          title: "Microphone Access API Unavailable",
+          description: "Please check browser permissions and try again. Look for camera/mic icon in your address bar.",
+        })
+        return
+      }
+      currentStep = "Starting new session"
+      console.log(`[2/9] ${currentStep}`)
       // Create a new session
       const activeTemplate = templateStore.activeTemplate
       sessionStore.startNewSession(sessionName, activeTemplate)
 
+      currentStep = "Requesting microphone access"
+      console.log(`[3/9] ${currentStep}`)
       // Get microphone access
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      currentStep = "Microphone access granted"
+      console.log(`[4/9] ${currentStep}`)
       audioStreamRef.current = stream
 
+      currentStep = "Creating MediaRecorder"
+      console.log(`[5/9] ${currentStep}`)
       const recorder = new MediaRecorder(stream)
 
+      currentStep = "Setting up MediaRecorder event handlers"
+      console.log(`[6/9] ${currentStep}`)
       // Set up event handlers
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) {
+          // Store chunk for session recording; transcription is handled via Web Audio pipeline
           setAudioChunks((prev) => [...prev, e.data])
-
-          // Send audio chunk to AssemblyAI via WebSocket
-          if (socketRef.current?.readyState === WebSocket.OPEN && !isMuted) {
-            // Convert blob to base64 and send
-            const reader = new FileReader()
-            reader.readAsDataURL(e.data)
-            reader.onloadend = () => {
-              const base64data = reader.result?.toString().split(",")[1]
-              if (base64data) {
-                socketRef.current?.send(JSON.stringify({ audio_data: base64data }))
-              }
-            }
-          }
         }
       }
 
+      currentStep = "Starting MediaRecorder"
+      console.log(`[7/9] ${currentStep}`)
       // Start recording
-      recorder.start(500) // Collect data every 500ms
+      recorder.start(500)
+      currentStep = "Updating component state (pre-async)"
+      console.log(`[8/9] ${currentStep}`)
       setMediaRecorder(recorder)
-      setRecordingState("recording")
       setRecordingTime(0)
       setLiveText("")
       setWordCount(0)
@@ -246,19 +318,88 @@ export default function RecordingTab() {
       resetAnalysisTimer()
       setAudioChunks([])
 
-      // Initialize WebSocket connection to AssemblyAI
-      await initializeTranscriptionSocket()
+      currentStep = "Initializing AssemblyAI transcription"
+      console.log(`[9/9] ${currentStep}`)
+      // Initialize AssemblyAI transcription
+      await initializeTranscription()
+
+      // Set up Web Audio pipeline using AudioWorklet
+      // Explicitly set sample rate to match AssemblyAI expectation
+      const audioCtx = new AudioContext({ sampleRate: 16000 })
+      audioCtxRef.current = audioCtx
+
+      // Load the processor
+      try {
+        await audioCtx.audioWorklet.addModule("/audio-processor.js")
+      } catch (e) {
+        console.error("Error loading audio worklet module:", e)
+        handleError(
+          ErrorType.RECORDING,
+          "Failed to load audio processor. Please refresh the page."
+        )
+        // Attempt cleanup before returning
+        stream.getTracks().forEach((track) => track.stop())
+        audioStreamRef.current = null
+        sessionStore.endCurrentSession() // End session started earlier
+        setRecordingState("idle")
+        return
+      }
+
+      // Create nodes
+      const sourceNode = audioCtx.createMediaStreamSource(audioStreamRef.current!)
+      audioSourceRef.current = sourceNode
+      const analyser = audioCtx.createAnalyser()
+      analyser.fftSize = 256
+      audioAnalyzerRef.current = analyser
+      const workletNode = new AudioWorkletNode(audioCtx, "audio-processor")
+      audioWorkletNodeRef.current = workletNode
+
+      // Handle messages from the worklet (audio data)
+      workletNode.port.onmessage = (event) => {
+        // event.data is the Float32Array from the processor
+        if (transcriberRef.current && !isMuted) {
+          // Use the correct helper function name
+          const pcmData = floatTo16BitPCM(event.data)
+          // Send the audio data to the transcriber
+          transcriberRef.current.sendAudio(pcmData.buffer)
+        }
+      }
+
+      // Connect the nodes: Mic Source -> Analyser -> Worklet -> Destination (optional, for hearing audio)
+      sourceNode.connect(analyser)
+      sourceNode.connect(workletNode)
+      // workletNode.connect(audioCtx.destination) // Uncomment to hear mic input
 
       toast({
-        title: "Recording Started",
-        description: "Your session is now being recorded.",
+        title: "Recording Started & Transcribing",
+        description: "Your session is now being recorded and transcribed.",
       })
+
+      // Set recording state *after* everything is initialized
+      setRecordingState("recording")
+
+      console.log("startRecording finished successfully.")
     } catch (error) {
+      console.error(`Error during startRecording at step: ${currentStep}`, error)
       handleError(ErrorType.RECORDING, error instanceof Error ? error.message : "Unknown error", {
         details: "Could not access microphone. Please check permissions.",
       })
+      // Ensure state is reset on error
+      setRecordingState("idle")
+      setIsConnecting(false)
+      setIsTranscribing(false)
     }
-  }, [sessionName, templateStore.activeTemplate, isMuted, toast])
+  }, [
+    sessionName,
+    templateStore.activeTemplate,
+    isMuted,
+    toast,
+    sessionStore, // Added
+    resetAnalysisTimer, // Added
+    initializeTranscription, // Added
+    handleError, // Added
+    floatTo16BitPCM, // Added (though used via worklet msg handler)
+  ])
 
   const pauseRecording = useCallback(() => {
     if (mediaRecorder && mediaRecorder.state === "recording") {
@@ -297,16 +438,33 @@ export default function RecordingTab() {
       setMediaRecorder(null)
     }
 
-    // Close WebSocket connection
-    if (socketRef.current) {
-      socketRef.current.close()
-      socketRef.current = null
-    }
-
-    // Stop audio tracks
+    // Disconnect and clean up
     if (audioStreamRef.current) {
       audioStreamRef.current.getTracks().forEach((track) => track.stop())
       audioStreamRef.current = null
+    }
+    if (transcriberRef.current) {
+      transcriberRef.current.close().catch(console.error)
+      transcriberRef.current = null
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close()
+      audioCtxRef.current = null
+    }
+
+    // Cleanup Web Audio resources
+    if (audioWorkletNodeRef.current) {
+      audioWorkletNodeRef.current.port.close()
+      audioWorkletNodeRef.current.disconnect()
+      audioWorkletNodeRef.current = null
+    }
+    if (audioSourceRef.current) {
+      audioSourceRef.current.disconnect()
+      audioSourceRef.current = null
+    }
+    if (audioAnalyzerRef.current) {
+      audioAnalyzerRef.current.disconnect()
+      audioAnalyzerRef.current = null
     }
 
     // Create audio blob and save to session
@@ -325,17 +483,14 @@ export default function RecordingTab() {
       title: "Recording Stopped",
       description: "Your recording has been stopped and saved.",
     })
-  }, [recordingState, mediaRecorder, audioChunks, sessionStore, toast])
-
-  // Analysis functions
-  const resetAnalysisTimer = useCallback(() => {
-    if (analysisInterval.startsWith("time-")) {
-      const seconds = Number.parseInt(analysisInterval.split("-")[1])
-      setNextAnalysisTime(seconds)
-    } else {
-      setNextAnalysisTime(0)
-    }
-  }, [analysisInterval])
+  }, [
+    recordingState,
+    mediaRecorder,
+    audioChunks,
+    sessionStore,
+    toast,
+    handleError, // Ensure errors during stop are handled if needed
+  ])
 
   const triggerManualAnalysis = useCallback(() => {
     if (!isRecording && !hasContent) return
@@ -449,7 +604,7 @@ export default function RecordingTab() {
       title: "New Session Created",
       description: "Ready to start recording.",
     })
-  }, [recordingState, toast])
+  }, [recordingState, toast, sessionStore])
 
   const saveTranscript = useCallback(() => {
     if (!liveText) {
@@ -701,12 +856,27 @@ export default function RecordingTab() {
   useEffect(() => {
     return () => {
       // Clean up on component unmount
-      if (socketRef.current) {
-        socketRef.current.close()
-      }
-
       if (audioStreamRef.current) {
         audioStreamRef.current.getTracks().forEach((track) => track.stop())
+      }
+
+      if (transcriberRef.current) {
+        transcriberRef.current.close().catch(console.error)
+      }
+
+      // Cleanup Web Audio resources
+      if (audioWorkletNodeRef.current) {
+        audioWorkletNodeRef.current.port.close()
+        audioWorkletNodeRef.current.disconnect()
+        audioWorkletNodeRef.current = null
+      }
+      if (audioSourceRef.current) {
+        audioSourceRef.current.disconnect()
+        audioSourceRef.current = null
+      }
+      if (audioCtxRef.current) {
+        audioCtxRef.current.close()
+        audioCtxRef.current = null
       }
     }
   }, [])
@@ -765,6 +935,7 @@ export default function RecordingTab() {
                     variant={isRecording ? "destructive" : "default"}
                     size="icon"
                     onClick={() => {
+                      console.log("Start Recording button clicked") // Log button click
                       if (recordingState === "idle") {
                         startRecording()
                       } else if (recordingState === "recording") {
@@ -1016,6 +1187,7 @@ export default function RecordingTab() {
                       })
                     }}
                   >
+                    <Save className="h-4 w-4 mr-2" />
                     Process
                   </Button>
                   <Button
@@ -1029,6 +1201,7 @@ export default function RecordingTab() {
                       })
                     }}
                   >
+                    <Save className="h-4 w-4 mr-2" />
                     Full Analysis
                   </Button>
                   <Button
@@ -1042,6 +1215,7 @@ export default function RecordingTab() {
                       })
                     }}
                   >
+                    <Save className="h-4 w-4 mr-2" />
                     Deep Analysis
                   </Button>
                 </div>
@@ -1273,6 +1447,35 @@ export default function RecordingTab() {
         profileName={isCreatingNewProfile ? undefined : templateStore.activeTemplate}
         isCreatingNew={isCreatingNewProfile}
       />
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Button
+            variant={isRecording ? "destructive" : "default"}
+            size="icon"
+            onClick={() => {
+              console.log("Start Recording button clicked") // Log button click
+              if (recordingState === "idle") {
+                startRecording()
+              } else if (recordingState === "recording") {
+                pauseRecording()
+              } else if (recordingState === "paused") {
+                resumeRecording()
+              }
+            }}
+            className="h-10 w-10 rounded-full"
+            aria-label={isRecording ? "Pause recording" : "Start recording"}
+            disabled={isConnecting}
+          >
+            {isConnecting ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : isRecording ? (
+              <Pause className="h-5 w-5" />
+            ) : (
+              <Play className="h-5 w-5" />
+            )}
+          </Button>
+        </div>
+      </div>
     </div>
   )
 }

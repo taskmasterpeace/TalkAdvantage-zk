@@ -30,8 +30,7 @@ export default function LoginPage() {
     setIsLoading(true)
 
     try {
-      await signIn(email, password)
-      // Add a small delay to ensure auth state is updated
+      await signIn({ email, password })
       setTimeout(() => {
         router.push(redirectTo)
       }, 500)
