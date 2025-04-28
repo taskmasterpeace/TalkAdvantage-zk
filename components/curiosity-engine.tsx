@@ -92,11 +92,19 @@ ${transcript}
       const data = await response.json()
 
       try {
-        // Parse the response as JSON
-        const parsedQuestions = JSON.parse(data.text)
-        const formattedQuestions = parsedQuestions.map((q, index) => ({
-          id: index + 1,
-          ...q,
+        // Extract JSON from markdown code fences if present
+        const rawText: string = data.text
+        const match = rawText.match(/```json\s*([\s\S]*?)\s*```/)
+        const jsonText = match ? match[1] : rawText
+        const cleaned = jsonText.trim()
+        const parsed = JSON.parse(cleaned)
+        if (!Array.isArray(parsed)) throw new Error("AI response JSON is not an array")
+        // Map to Question[], annotate types to satisfy TS
+        const formattedQuestions: Question[] = (parsed as any[]).map((item: any, idx: number) => ({
+          id: idx + 1,
+          type: item.type,
+          text: item.text,
+          options: item.options,
         }))
         setQuestions(formattedQuestions)
 
@@ -233,12 +241,12 @@ ${transcript}
 
   const unansweredQuestions = questions.filter((q) => !q.answered)
   const answeredQuestions = questions.filter((q) => q.answered)
-  const currentQuestion = unansweredQuestions[0]
 
+  // Render all unanswered questions simultaneously
   return (
     <div className="h-full flex flex-col">
       <div className="flex items-center justify-between p-2">
-        <h3 className="font-medium">Questions</h3>
+        <h3 className="font-medium">Curiosity Engine</h3>
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="icon" onClick={generateQuestions} disabled={isGenerating}>
             {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
@@ -248,43 +256,43 @@ ${transcript}
           </Button>
         </div>
       </div>
-
       <div className="flex-1 p-2 overflow-y-auto space-y-4">
-        {/* Current Question */}
-        {unansweredQuestions.length > 0 && (
-          <Card key={currentQuestion.id} className="p-4">
+        {unansweredQuestions.map((q) => (
+          <Card key={q.id} className="p-4">
             <div className="text-xs text-muted-foreground mb-1">
-              {currentQuestion.type === "YES_NO" && "Yes/No Question"}
-              {currentQuestion.type === "MULTIPLE_CHOICE" && "Multiple Choice"}
-              {currentQuestion.type === "MULTIPLE_CHOICE_FILL" && "Multiple Choice with Other"}
-              {currentQuestion.type === "SPEAKER_IDENTIFICATION" && "Speaker Identification"}
-              {currentQuestion.type === "MEETING_TYPE" && "Meeting Type"}
-              {currentQuestion.type === "OPEN_ENDED" && "Open-Ended Question"}
+              {q.type === "YES_NO" && "Yes/No Question"}
+              {q.type === "MULTIPLE_CHOICE" && "Multiple Choice"}
+              {q.type === "MULTIPLE_CHOICE_FILL" && "Multiple Choice with Other"}
+              {q.type === "SPEAKER_IDENTIFICATION" && "Speaker Identification"}
+              {q.type === "MEETING_TYPE" && "Meeting Type"}
+              {q.type === "OPEN_ENDED" && "Open-Ended Question"}
             </div>
-            <p className="font-medium mb-4">{currentQuestion.text}</p>
-
-            {/* Different input types based on question type */}
-            {(currentQuestion.type === "MULTIPLE_CHOICE" || currentQuestion.type === "MULTIPLE_CHOICE_FILL") && (
+            <p className="font-medium mb-4">{q.text}</p>
+            {(q.type === "YES_NO" || q.type === "MULTIPLE_CHOICE" || q.type === "MULTIPLE_CHOICE_FILL") && (
               <div className="space-y-3 mb-4">
-                <RadioGroup value={selectedOption || ""} onValueChange={setSelectedOption}>
-                  {currentQuestion.options?.map((option, index) => (
-                    <div key={index} className="flex items-center space-x-2">
-                      <RadioGroupItem value={option} id={`option-${index}`} />
-                      <Label htmlFor={`option-${index}`}>{option}</Label>
+                <RadioGroup
+                  value={selectedOption || ""}
+                  onValueChange={(val) => { setSelectedOption(val); submitAnswer(q.id) }}
+                >
+                  {(q.type === "YES_NO" ? ["Yes", "No"] : q.options || []).map((opt, idx) => (
+                    <div key={idx} className="flex items-center space-x-2">
+                      <RadioGroupItem value={opt} id={`option-${q.id}-${idx}`} />
+                      <Label htmlFor={`option-${q.id}-${idx}`}>{opt}</Label>
                     </div>
                   ))}
-                  {currentQuestion.type === "MULTIPLE_CHOICE_FILL" && (
+                  {q.type === "MULTIPLE_CHOICE_FILL" && (
                     <div className="space-y-2">
                       <div className="flex items-center space-x-2">
-                        <RadioGroupItem value="Other" id="option-other" />
-                        <Label htmlFor="option-other">Other</Label>
+                        <RadioGroupItem value="Other" id={`option-other-${q.id}`} />
+                        <Label htmlFor={`option-other-${q.id}`}>Other</Label>
                       </div>
                       {selectedOption === "Other" && (
                         <Input
                           placeholder="Please specify..."
                           value={otherAnswer}
                           onChange={(e) => setOtherAnswer(e.target.value)}
-                          className="ml-6 w-[calc(100%-1.5rem)]"
+                          className="ml-6 w-full"
+                          onKeyDown={(e) => { if (e.key === "Enter") submitAnswer(q.id) }}
                         />
                       )}
                     </div>
@@ -292,43 +300,8 @@ ${transcript}
                 </RadioGroup>
               </div>
             )}
-
-            {(currentQuestion.type === "YES_NO" ||
-              currentQuestion.type === "SPEAKER_IDENTIFICATION" ||
-              currentQuestion.type === "MEETING_TYPE" ||
-              currentQuestion.type === "OPEN_ENDED") && (
-              <Input
-                placeholder={
-                  currentQuestion.type === "YES_NO"
-                    ? "Type 'Yes' or 'No'..."
-                    : currentQuestion.type === "OPEN_ENDED"
-                      ? "Your detailed answer..."
-                      : "Your answer..."
-                }
-                value={currentAnswer}
-                onChange={(e) => setCurrentAnswer(e.target.value)}
-                className="mb-4"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    submitAnswer(currentQuestion.id)
-                  }
-                }}
-              />
-            )}
-
-            <div className="flex items-center gap-2">
-              <Button onClick={() => submitAnswer(currentQuestion.id)} className="flex-1">
-                <Send className="h-4 w-4 mr-2" />
-                Submit Answer
-              </Button>
-              <Button variant="ghost" size="icon" onClick={() => skipQuestion(currentQuestion.id)}>
-                <SkipForward className="h-4 w-4" />
-              </Button>
-            </div>
           </Card>
-        )}
-
-        {/* Answered Questions */}
+        ))}
         {answeredQuestions.length > 0 && (
           <div className="space-y-2">
             <h4 className="text-sm font-medium text-muted-foreground">Answered Questions</h4>
