@@ -1,18 +1,40 @@
+"use client"
+
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { CheckCircle2, Zap, Mic, FileText, BrainCircuit, BarChart3, Users, Check } from "lucide-react"
+import { motion } from "framer-motion"
+
+const fadeInUp = {
+  initial: { opacity: 0, y: 20 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0.5 }
+}
+
+const staggerChildren = {
+  animate: {
+    transition: {
+      staggerChildren: 0.1
+    }
+  }
+}
 
 export default function LandingPage() {
   return (
     <div className="min-h-screen bg-background">
       {/* Navigation */}
       <header className="border-b border-border sticky top-0 bg-background/95 backdrop-blur z-10">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+        <motion.div 
+          initial={{ y: -20, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          transition={{ duration: 0.5 }}
+          className="container mx-auto px-4 py-4 flex items-center justify-between"
+        >
           <div className="flex items-center gap-2">
-            <Mic className="h-6 w-6 text-primary" />
-            <span className="text-2xl font-bold text-primary">TalkAdvantage</span>
+            <Mic className="h-6 w-6 text-primary animate-pulse" />
+            <span className="text-2xl font-bold text-primary hover:scale-105 transition-transform">TalkAdvantage</span>
           </div>
           <nav className="hidden md:flex items-center gap-8">
             <Link href="#features" className="text-sm font-medium hover:text-primary transition-colors">
@@ -36,20 +58,31 @@ export default function LandingPage() {
               <Button>Get Started</Button>
             </Link>
           </div>
-        </div>
+        </motion.div>
       </header>
 
       {/* Hero Section */}
       <section className="py-20 md:py-32">
         <div className="container mx-auto px-4">
-          <div className="flex flex-col md:flex-row items-center gap-12">
-            <div className="md:w-1/2 space-y-6">
-              <Badge variant="outline" className="px-3 py-1 text-sm">
+          <motion.div 
+            initial="initial"
+            animate="animate"
+            variants={staggerChildren}
+            className="flex flex-col md:flex-row items-center gap-12"
+          >
+            <motion.div 
+              variants={fadeInUp}
+              className="md:w-1/2 space-y-6"
+            >
+              <Badge variant="outline" className="px-3 py-1 text-sm hover:scale-105 transition-transform">
                 AI-Powered Meeting Assistant
               </Badge>
-              <h1 className="text-4xl md:text-6xl font-bold leading-tight">
-                Transform Your Meetings with <span className="text-primary">AI Intelligence</span>
-              </h1>
+              <motion.h1 
+                variants={fadeInUp}
+                className="text-4xl md:text-6xl font-bold leading-tight"
+              >
+                Transform Your Meetings with <span className="text-primary animate-text-gradient bg-gradient-to-r from-primary via-purple-500 to-primary bg-clip-text text-transparent bg-300% animate-gradient">AI Intelligence</span>
+              </motion.h1>
               <p className="text-xl text-muted-foreground">
                 TalkAdvantage captures, transcribes, and analyzes your conversations in real-time, turning meetings into
                 actionable insights.
@@ -70,19 +103,24 @@ export default function LandingPage() {
                 <CheckCircle2 className="h-4 w-4 text-primary" />
                 <span>No credit card required for free trial</span>
               </div>
-            </div>
-            <div className="md:w-1/2">
-              <div className="relative">
-                <div className="absolute -top-6 -left-6 w-24 h-24 bg-primary/10 rounded-full blur-xl"></div>
-                <div className="absolute -bottom-6 -right-6 w-32 h-32 bg-primary/10 rounded-full blur-xl"></div>
+            </motion.div>
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.7 }}
+              className="md:w-1/2"
+            >
+              <div className="relative hover:scale-105 transition-transform duration-500">
+                <div className="absolute -top-6 -left-6 w-24 h-24 bg-primary/10 rounded-full blur-xl animate-pulse"></div>
+                <div className="absolute -bottom-6 -right-6 w-32 h-32 bg-primary/10 rounded-full blur-xl animate-pulse"></div>
                 <img
                   src="/ai-meeting-dashboard.png"
                   alt="TalkAdvantage Dashboard"
                   className="rounded-lg border shadow-xl w-full"
                 />
               </div>
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
         </div>
       </section>
 
@@ -103,7 +141,13 @@ export default function LandingPage() {
       {/* Features Section */}
       <section id="features" className="py-20">
         <div className="container mx-auto px-4">
-          <div className="text-center max-w-3xl mx-auto mb-16">
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.5 }}
+            className="text-center max-w-3xl mx-auto mb-16"
+          >
             <Badge variant="outline" className="px-3 py-1 text-sm mb-4">
               Features
             </Badge>
@@ -111,9 +155,15 @@ export default function LandingPage() {
             <p className="text-xl text-muted-foreground">
               TalkAdvantage combines powerful AI with an intuitive interface to make your meetings more productive.
             </p>
-          </div>
+          </motion.div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+          <motion.div 
+            initial="initial"
+            whileInView="animate"
+            viewport={{ once: true }}
+            variants={staggerChildren}
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"
+          >
             {[
               {
                 icon: <Mic className="h-8 w-8 text-primary" />,
@@ -152,13 +202,20 @@ export default function LandingPage() {
                   "Visual mapping of conversation flow with AI-powered guidance for better meeting facilitation.",
               },
             ].map((feature, index) => (
-              <Card key={index} className="p-6 hover:shadow-md transition-shadow">
-                <div className="mb-4">{feature.icon}</div>
-                <h3 className="text-xl font-semibold mb-2">{feature.title}</h3>
-                <p className="text-muted-foreground">{feature.description}</p>
-              </Card>
+              <motion.div
+                key={index}
+                variants={fadeInUp}
+                whileHover={{ scale: 1.05 }}
+                transition={{ duration: 0.2 }}
+              >
+                <Card className="p-6 hover:shadow-lg transition-all duration-300">
+                  <div className="mb-4 transform transition-transform hover:scale-110">{feature.icon}</div>
+                  <h3 className="text-xl font-semibold mb-2">{feature.title}</h3>
+                  <p className="text-muted-foreground">{feature.description}</p>
+                </Card>
+              </motion.div>
             ))}
-          </div>
+          </motion.div>
         </div>
       </section>
 
@@ -677,6 +734,27 @@ export default function LandingPage() {
           </div>
         </div>
       </footer>
+
+      {/* Add to head section */}
+      <style jsx global>{`
+        @keyframes text-gradient {
+          0% { background-position: 0% 50% }
+          50% { background-position: 100% 50% }
+          100% { background-position: 0% 50% }
+        }
+        
+        .animate-text-gradient {
+          animation: text-gradient 6s linear infinite;
+        }
+        
+        .bg-300\% {
+          background-size: 300%;
+        }
+        
+        .animate-gradient {
+          animation: text-gradient 6s linear infinite;
+        }
+      `}</style>
     </div>
   )
 }

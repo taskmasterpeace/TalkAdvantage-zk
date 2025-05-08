@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card"
 import { DashboardHeader } from "@/components/dashboard-header"
 import dynamic from "next/dynamic"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Mic, BookOpen, Upload, Brain } from "lucide-react"
 
 // Use dynamic imports with ssr: false to avoid window is not defined errors
 const RecordingTab = dynamic(() => import("@/components/recording-tab"), {
@@ -13,7 +14,8 @@ const RecordingTab = dynamic(() => import("@/components/recording-tab"), {
   loading: () => <TabContentSkeleton />,
 })
 
-const LibraryTab = dynamic(() => import("@/components/library-tab"), {
+// Fix for chunk loading error - adding webpack chunk name
+const LibraryTab = dynamic(() => import(/* webpackChunkName: "library-tab" */ "@/components/library-tab"), {
   ssr: false,
   loading: () => <TabContentSkeleton />,
 })
@@ -72,11 +74,43 @@ export default function DashboardClient() {
       <main className="flex-1 p-4 md:p-6">
         <Card className="border-none shadow-none">
           <Tabs defaultValue={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid grid-cols-4 mb-4">
-              <TabsTrigger value="record">Record</TabsTrigger>
-              <TabsTrigger value="library">Library</TabsTrigger>
-              <TabsTrigger value="import">Import</TabsTrigger>
-              <TabsTrigger value="analysis">Analysis</TabsTrigger>
+            <TabsList className="grid grid-cols-4 mb-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 p-1 rounded-lg border border-blue-200 dark:border-blue-800 shadow-sm">
+              <TabsTrigger 
+                value="record"
+                className="data-[state=active]:bg-white data-[state=active]:dark:bg-slate-900 data-[state=active]:text-slate-900 data-[state=active]:dark:text-slate-100 data-[state=active]:shadow-sm rounded-md px-3 py-1.5 text-sm font-medium transition-all data-[state=inactive]:text-slate-600 dark:data-[state=inactive]:text-slate-400 data-[state=inactive]:hover:bg-white/50 dark:data-[state=inactive]:hover:bg-slate-800/50"
+              >
+                <div className="flex items-center gap-1.5">
+                  <Mic className="h-4 w-4" />
+                  Record
+                </div>
+              </TabsTrigger>
+              <TabsTrigger 
+                value="library"
+                className="data-[state=active]:bg-white data-[state=active]:dark:bg-slate-900 data-[state=active]:text-slate-900 data-[state=active]:dark:text-slate-100 data-[state=active]:shadow-sm rounded-md px-3 py-1.5 text-sm font-medium transition-all data-[state=inactive]:text-slate-600 dark:data-[state=inactive]:text-slate-400 data-[state=inactive]:hover:bg-white/50 dark:data-[state=inactive]:hover:bg-slate-800/50"
+              >
+                <div className="flex items-center gap-1.5">
+                  <BookOpen className="h-4 w-4" />
+                  Library
+                </div>
+              </TabsTrigger>
+              <TabsTrigger 
+                value="import"
+                className="data-[state=active]:bg-white data-[state=active]:dark:bg-slate-900 data-[state=active]:text-slate-900 data-[state=active]:dark:text-slate-100 data-[state=active]:shadow-sm rounded-md px-3 py-1.5 text-sm font-medium transition-all data-[state=inactive]:text-slate-600 dark:data-[state=inactive]:text-slate-400 data-[state=inactive]:hover:bg-white/50 dark:data-[state=inactive]:hover:bg-slate-800/50"
+              >
+                <div className="flex items-center gap-1.5">
+                  <Upload className="h-4 w-4" />
+                  Import
+                </div>
+              </TabsTrigger>
+              <TabsTrigger 
+                value="analysis"
+                className="data-[state=active]:bg-white data-[state=active]:dark:bg-slate-900 data-[state=active]:text-slate-900 data-[state=active]:dark:text-slate-100 data-[state=active]:shadow-sm rounded-md px-3 py-1.5 text-sm font-medium transition-all data-[state=inactive]:text-slate-600 dark:data-[state=inactive]:text-slate-400 data-[state=inactive]:hover:bg-white/50 dark:data-[state=inactive]:hover:bg-slate-800/50"
+              >
+                <div className="flex items-center gap-1.5">
+                  <Brain className="h-4 w-4" />
+                  Analysis
+                </div>
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="record" className="mt-0">
               <RecordingTab />
