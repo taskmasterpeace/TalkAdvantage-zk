@@ -1,7 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { transcribeAudioFromUrl, uploadAudioFile, validateFileSize } from "@/lib/assemblyai"
-import { createRouteHandlerClient } from "@supabase/auth-helpers-nextjs"
-import { cookies } from "next/headers"
+import { getSupabaseServerClient } from "@/lib/supabase"
 
 export async function POST(request: NextRequest) {
   try {
@@ -69,7 +68,7 @@ export async function POST(request: NextRequest) {
     // If we have a recording ID, update the recording in Supabase
     const recordingId = formData.get("recordingId") as string | null
     if (recordingId) {
-      const supabase = createRouteHandlerClient({ cookies })
+      const supabase = await getSupabaseServerClient()
 
       // Update the recording
       await supabase
@@ -83,7 +82,7 @@ export async function POST(request: NextRequest) {
       // Create transcript entry
       await supabase.from("transcripts").insert({
         recording_id: recordingId,
-        full_text: transcriptionResult.transcript,
+        full_text: transcriptionResult.transcript
       })
     }
 

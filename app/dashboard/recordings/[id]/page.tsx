@@ -1,9 +1,10 @@
 import type { Metadata } from "next"
-import { createServerComponentClient } from "@supabase/auth-helpers-nextjs"
 import { cookies } from "next/headers"
 import { notFound } from "next/navigation"
 import RecordingDetails from "@/components/recording-details"
 import TranscriptionProcessor from "@/components/transcription-processor"
+import * as r2ServiceServer from "@/lib/cloudflare/r2-service-server"
+import { getSupabaseServerClient } from "@/lib/supabase"
 
 interface PageProps {
   params: {
@@ -12,9 +13,22 @@ interface PageProps {
 }
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
-  const supabase = createServerComponentClient({ cookies })
+  // Ensure we're using fully resolved params object
+  const id = params.id
+  
+  // Get the storage location from the cookie
+  const cookieValue = cookies().get("storageLocation")?.value
+  const storageLocation = cookieValue || "cloud"
 
-  const { data: recording } = await supabase.from("recordings").select("name").eq("id", params.id).single()
+  if (storageLocation === "local") {
+    return {
+      title: "Local Recording | TalkAdvantage",
+      description: "View and analyze your local recording with TalkAdvantage",
+    }
+  }
+
+  const supabase = await getSupabaseServerClient()
+  const { data: recording } = await supabase.from("recordings").select("name").eq("id", id).single()
 
   return {
     title: recording ? `${recording.name} | TalkAdvantage` : "Recording | TalkAdvantage",
@@ -23,10 +37,40 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 }
 
 export default async function RecordingPage({ params }: PageProps) {
-  const supabase = createServerComponentClient({ cookies })
+  // Ensure we're using fully resolved params object
+  const id = params.id
+  
+  // Get the storage location from the cookie
+  const cookieValue = cookies().get("storageLocation")?.value
+  const storageLocation = cookieValue || "cloud"
+
+  // Handle local storage
+  if (storageLocation === "local") {
+    return (
+      <div className="container mx-auto py-8">
+        <h1 className="text-3xl font-bold mb-8">Recording Details</h1>
+        <RecordingDetails 
+          recording={{ 
+            id, 
+            name: "Local Recording", // This will be updated client-side
+            description: null,
+            duration_seconds: 0,
+            created_at: new Date().toISOString(),
+            is_processed: false,
+            is_public: false
+          }} 
+          audioUrl="" 
+          isLocal={true} 
+        />
+      </div>
+    )
+  }
+
+  // Handle cloud storage (existing code)
+  const supabase = await getSupabaseServerClient()
 
   // Get recording details
-  const { data: recording, error } = await supabase.from("recordings").select("*").eq("id", params.id).single()
+  const { data: recording, error } = await supabase.from("recordings").select("*").eq("id", id).single()
 
   if (error || !recording) {
     notFound()
@@ -36,10 +80,13 @@ export default async function RecordingPage({ params }: PageProps) {
   const { data: transcript } = await supabase
     .from("transcripts")
     .select("id")
-    .eq("recording_id", params.id)
+    .eq("recording_id", id)
     .maybeSingle()
 
   const hasTranscript = !!transcript
+  
+  // Get the audio URL for the recording using the server version of the function
+  const audioUrl = await r2ServiceServer.getFileUrl(recording.storage_path);
 
   return (
     <div className="container mx-auto py-8">
@@ -48,14 +95,11 @@ export default async function RecordingPage({ params }: PageProps) {
       {!hasTranscript && !recording.is_processed ? (
         <div className="mb-8">
           <TranscriptionProcessor
-            recordingId={params.id}
-            onComplete={() => {
-              // This will be handled client-side
-            }}
+            recordingId={id}
           />
         </div>
       ) : (
-        <RecordingDetails recordingId={params.id} />
+        <RecordingDetails recording={recording} audioUrl={audioUrl} />
       )}
     </div>
   )

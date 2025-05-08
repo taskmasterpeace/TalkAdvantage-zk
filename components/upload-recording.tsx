@@ -1,22 +1,20 @@
 "use client"
 
-import type React from "react"
-
-import { useState } from "react"
+import React, { useState, useRef } from "react"
 import { useRouter } from "next/navigation"
+import { getSupabaseClient } from "@/lib/supabase/client"
+import { useToast } from "@/hooks/use-toast"
+import { unifiedRecordingsService } from "@/lib/recordings-service"
+import { CreateRecordingParams } from "@/lib/supabase/recordings-service"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
+import { Switch } from "@/components/ui/switch"
 import { Card, CardContent } from "@/components/ui/card"
 import { Progress } from "@/components/ui/progress"
-import { Switch } from "@/components/ui/switch"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { useToast } from "@/hooks/use-toast"
-import { Upload, FileAudio, AlertCircle, CheckCircle2, X } from "lucide-react"
-import { getSupabaseClient } from "@/lib/supabase/client"
-import { useFileUpload } from "@/hooks/use-file-upload"
-import type { CreateRecordingParams } from "@/types/recording"
+import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert"
+import { CheckCircle2, Upload, X, FileAudio, AlertCircle, Loader2 } from "lucide-react"
 
 export default function UploadRecording() {
   const [name, setName] = useState("")
@@ -24,14 +22,13 @@ export default function UploadRecording() {
   const [isPublic, setIsPublic] = useState(false)
   const [success, setSuccess] = useState(false)
   const [recordingId, setRecordingId] = useState<string | null>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [error, setError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
   const router = useRouter()
-
-  // Use our custom hook for file upload logic
-  const { file, fileInputRef, uploading, progress, error, handleFileChange, uploadFile, resetFile } = useFileUpload({
-    maxSizeMB: 100,
-    allowedTypes: ["audio/"],
-  })
 
   const handleSelectFile = () => {
     if (fileInputRef.current) {
@@ -39,13 +36,37 @@ export default function UploadRecording() {
     }
   }
 
-  const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFile = handleFileChange(e)
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setError(null)
+    const files = e.target.files
+    
+    if (!files || files.length === 0) {
+      return null
+    }
 
+    const selectedFile = files[0]
+    
+    // Basic validation
+    if (!selectedFile.type.startsWith('audio/')) {
+      setError('Only audio files are allowed')
+      return null
+    }
+    
     // Auto-fill name with file name (without extension)
     if (selectedFile && !name) {
       const fileName = selectedFile.name.split(".").slice(0, -1).join(".")
       setName(fileName)
+    }
+    
+    setFile(selectedFile)
+    return selectedFile
+  }
+
+  const resetFile = () => {
+    setFile(null)
+    setError(null)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ""
     }
   }
 
@@ -71,6 +92,21 @@ export default function UploadRecording() {
     }
 
     try {
+      setUploading(true)
+      setProgress(0)
+      setError(null)
+      
+      // Simulate progress updates
+      const progressInterval = setInterval(() => {
+        setProgress(prev => {
+          if (prev >= 90) {
+            clearInterval(progressInterval)
+            return prev
+          }
+          return prev + 10
+        })
+      }, 300)
+      
       const supabase = getSupabaseClient()
 
       // Get current user
@@ -82,43 +118,31 @@ export default function UploadRecording() {
         throw new Error("User not authenticated")
       }
 
-      // Upload file to storage
-      const result = await uploadFile(user.id)
-
-      if (!result) {
-        return // Error already handled in hook
-      }
-
-      // Create recording entry in database
+      // Upload file to storage using our unified service
       const recordingParams: CreateRecordingParams = {
         name: name.trim(),
         description: description.trim() || undefined,
         isPublic,
       }
+      
+      // Upload using our unified service that handles both local and cloud storage
+      const recording = await unifiedRecordingsService.createRecording(user.id, file, recordingParams)
 
-      const { data: recording, error: dbError } = await supabase
-        .from("recordings")
-        .insert({
-          user_id: user.id,
-          name: recordingParams.name,
-          description: recordingParams.description || null,
-          duration_seconds: 0, // Will be updated after processing
-          storage_path: result.filePath,
-          is_public: recordingParams.isPublic,
-        })
-        .select()
-        .single()
-
-      if (dbError) {
-        throw new Error(`Error creating recording entry: ${dbError.message}`)
-      }
-
+      // Complete progress
+      clearInterval(progressInterval)
+      setProgress(100)
+      
       setSuccess(true)
       setRecordingId(recording.id)
 
+      // Detect if we're using local or cloud storage
+      const isLocal = unifiedRecordingsService.isLocalStorage()
+
       toast({
-        title: "Upload successful",
-        description: "Your recording has been uploaded successfully",
+        title: isLocal ? "Saved locally" : "Upload successful",
+        description: isLocal 
+          ? "Your recording has been saved to your local device in privacy mode." 
+          : "Your recording has been uploaded successfully",
       })
 
       // Redirect to recording page after a short delay
@@ -127,11 +151,14 @@ export default function UploadRecording() {
       }, 2000)
     } catch (err) {
       console.error("Upload error:", err)
+      setError(err instanceof Error ? err.message : "An unknown error occurred")
       toast({
         variant: "destructive",
         title: "Upload failed",
         description: err instanceof Error ? err.message : "An unknown error occurred",
       })
+    } finally {
+      setUploading(false)
     }
   }
 
@@ -146,7 +173,7 @@ export default function UploadRecording() {
               type="file"
               id="file"
               ref={fileInputRef}
-              onChange={handleFileSelected}
+              onChange={handleFileChange}
               accept="audio/*"
               className="hidden"
               aria-label="Upload audio file"
@@ -255,7 +282,9 @@ export default function UploadRecording() {
               <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" aria-hidden="true" />
               <AlertTitle className="text-green-600 dark:text-green-400">Success</AlertTitle>
               <AlertDescription>
-                Your recording has been uploaded successfully. Redirecting to recording page...
+                {unifiedRecordingsService.isLocalStorage() 
+                  ? "Your recording has been saved locally. Redirecting..." 
+                  : "Your recording has been uploaded successfully. Redirecting..."}
               </AlertDescription>
             </Alert>
           )}
@@ -268,7 +297,14 @@ export default function UploadRecording() {
               className="w-full sm:w-auto"
               aria-busy={uploading}
             >
-              {uploading ? "Uploading..." : "Upload Recording"}
+              {uploading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  {unifiedRecordingsService.isLocalStorage() ? "Saving..." : "Uploading..."}
+                </>
+              ) : (
+                unifiedRecordingsService.isLocalStorage() ? "Save Recording" : "Upload Recording"
+              )}
             </Button>
           </div>
         </form>

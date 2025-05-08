@@ -57,6 +57,7 @@ interface SessionState {
   deleteSession: (id: string) => void
   setAudioBlob: (blob: Blob) => void
   getFullTranscriptText: () => string
+  updateSessionName: (name: string) => void
 }
 
 export const useSessionStore = create<SessionState>()(
@@ -186,6 +187,21 @@ export const useSessionStore = create<SessionState>()(
           .sort((a, b) => a.start_ms - b.start_ms)
           .map((segment) => segment.text)
           .join(" ")
+      },
+
+      updateSessionName: (name) => {
+        const current = get().currentSession
+        if (current) {
+          set({
+            currentSession: {
+              ...current,
+              session_info: {
+                ...current.session_info,
+                name,
+              },
+            },
+          })
+        }
       },
     }),
     {

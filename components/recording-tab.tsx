@@ -50,6 +50,8 @@ import { useSessionStore, type TranscriptSegment } from "@/lib/session-store"
 import { useErrorHandler, ErrorType } from "@/lib/error-handler"
 import { ProfileEditorDialog } from "./profile-editor-dialog"
 import { AssemblyAI } from "assemblyai"
+import { getSupabaseClient } from "@/lib/supabase/client"
+import { unifiedRecordingsService } from "@/lib/recordings-service"
 
 // Add a type for the recording state to improve type safety
 type RecordingState = "idle" | "recording" | "paused"
@@ -68,7 +70,11 @@ export default function RecordingTab() {
   const [isMuted, setIsMuted] = useState(false)
 
   // Session data
-  const [sessionName, setSessionName] = useState("TalkAdvantage Session")
+  const [sessionName, setSessionName] = useState(() => {
+    // Retrieve session name from local storage or use default
+    const savedSessionName = localStorage.getItem('lastSessionName');
+    return savedSessionName || "TalkAdvantage Session";
+  })
   const [isEditingName, setIsEditingName] = useState(false)
   const [liveText, setLiveText] = useState("")
   const [editMode, setEditMode] = useState(false)
@@ -140,13 +146,62 @@ export default function RecordingTab() {
     templateStore.loadDefaultTemplates()
   }, [])
 
-  // Format time helper function
+  // Helper to format time in human readable format
   const formatTime = (seconds: number) => {
     const h = Math.floor(seconds / 3600)
     const m = Math.floor((seconds % 3600) / 60)
     const s = seconds % 60
     return [h, m, s].map((v) => v.toString().padStart(2, "0")).join(":")
   }
+
+  // Helper to generate unique session name
+  const generateUniqueSessionName = useCallback((baseName: string) => {
+    // Check localStorage for existing sessions from the same day
+    const today = new Date().toLocaleDateString();
+    const existingSessions: { name: string, date: string }[] = [];
+    
+    // Parse each localStorage item that might be a saved session
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('session_')) {
+        try {
+          const sessionData = JSON.parse(localStorage.getItem(key) || '{}');
+          if (sessionData.date && sessionData.name) {
+            existingSessions.push({
+              name: sessionData.name,
+              date: sessionData.date
+            });
+          }
+        } catch (e) {
+          // Skip invalid entries
+        }
+      }
+    }
+    
+    // Filter sessions from today with the same base name
+    const sameNameSessions = existingSessions.filter(session => 
+      session.date === today && session.name.startsWith(baseName)
+    );
+    
+    // If no duplicate, return the original name
+    if (sameNameSessions.length === 0) {
+      return baseName;
+    }
+    
+    // Find the highest number in parentheses
+    let highestNum = 0;
+    sameNameSessions.forEach(session => {
+      // Check if the name ends with a pattern like "(2)"
+      const match = session.name.match(/\((\d+)\)$/);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > highestNum) highestNum = num;
+      }
+    });
+    
+    // Return the base name with next number
+    return `${baseName} (${highestNum + 1})`;
+  }, []);
 
   // Reset the analysis timer based on the selected interval
   const resetAnalysisTimer = useCallback(() => {
@@ -278,9 +333,28 @@ export default function RecordingTab() {
       }
       currentStep = "Starting new session"
       console.log(`[2/9] ${currentStep}`)
+      
+      // Generate a unique session name to avoid duplicates
+      const uniqueSessionName = generateUniqueSessionName(sessionName);
+      if (uniqueSessionName !== sessionName) {
+        setSessionName(uniqueSessionName);
+        localStorage.setItem('lastSessionName', uniqueSessionName);
+        toast({
+          title: "Session Name Updated",
+          description: `Using unique name "${uniqueSessionName}" to avoid duplicates`,
+        });
+      }
+      
       // Create a new session
       const activeTemplate = templateStore.activeTemplate
-      sessionStore.startNewSession(sessionName, activeTemplate)
+      sessionStore.startNewSession(uniqueSessionName, activeTemplate)
+
+      // Save session details for future reference
+      const today = new Date().toLocaleDateString();
+      localStorage.setItem(`session_${Date.now()}`, JSON.stringify({
+        name: uniqueSessionName,
+        date: today
+      }));
 
       currentStep = "Requesting microphone access"
       console.log(`[3/9] ${currentStep}`)
@@ -394,11 +468,12 @@ export default function RecordingTab() {
     templateStore.activeTemplate,
     isMuted,
     toast,
-    sessionStore, // Added
-    resetAnalysisTimer, // Added
-    initializeTranscription, // Added
-    handleError, // Added
-    floatTo16BitPCM, // Added (though used via worklet msg handler)
+    sessionStore,
+    resetAnalysisTimer,
+    initializeTranscription,
+    handleError,
+    floatTo16BitPCM,
+    generateUniqueSessionName,
   ])
 
   const pauseRecording = useCallback(() => {
@@ -471,6 +546,61 @@ export default function RecordingTab() {
     if (audioChunks.length > 0) {
       const audioBlob = new Blob(audioChunks, { type: "audio/webm" })
       sessionStore.setAudioBlob(audioBlob)
+      
+      // Upload the recording to either local or cloud storage based on settings
+      if (audioBlob.size > 0) {
+        (async () => {
+          try {
+            const supabase = getSupabaseClient()
+            
+            // Get current user
+            const {
+              data: { user },
+            } = await supabase.auth.getUser()
+            
+            if (!user) {
+              toast({
+                variant: "destructive",
+                title: "Authentication Error",
+                description: "You must be logged in to save recordings",
+              })
+              return
+            }
+            
+            // Create a file object from the blob
+            const file = new File([audioBlob], `${sessionName.replace(/\s+/g, "-").toLowerCase()}.webm`, { 
+              type: "audio/webm"
+            })
+            
+            // Use our unified recording service which handles both local and cloud storage
+            const recording = await unifiedRecordingsService.createRecording(user.id, file, {
+              name: sessionName,
+              description: sessionName,
+              durationSeconds: recordingTime,
+              isPublic: false,
+            })
+            
+            const isLocal = unifiedRecordingsService.isLocalStorage()
+            
+            toast({
+              title: isLocal 
+                ? "Recording Saved Locally" 
+                : "Recording Saved to Cloud",
+              description: isLocal
+                ? "Your recording has been saved to your local device in privacy mode."
+                : "Your recording has been uploaded and saved to your account.",
+            })
+            
+          } catch (error) {
+            console.error("Error saving recording:", error)
+            toast({
+              variant: "destructive",
+              title: "Save Failed",
+              description: error instanceof Error ? error.message : "Failed to save recording",
+            })
+          }
+        })()
+      }
     }
 
     // End current session
@@ -488,8 +618,10 @@ export default function RecordingTab() {
     mediaRecorder,
     audioChunks,
     sessionStore,
+    sessionName,
+    recordingTime,
     toast,
-    handleError, // Ensure errors during stop are handled if needed
+    handleError,
   ])
 
   const triggerManualAnalysis = useCallback(() => {
@@ -575,6 +707,15 @@ export default function RecordingTab() {
       stopRecording()
     }
 
+    // Make sure session name is applied if needed
+    const currentSession = sessionStore.currentSession;
+    if (currentSession && currentSession.session_info.name !== sessionName) {
+      sessionStore.updateSessionName(sessionName);
+    }
+    
+    // Store in localStorage for future sessions
+    localStorage.setItem('lastSessionName', sessionName);
+
     // Save the session
     sessionStore.saveSession()
 
@@ -594,17 +735,24 @@ export default function RecordingTab() {
       return
     }
 
-    setSessionName("TalkAdvantage Session")
+    // Generate a unique base session name
+    const defaultName = "TalkAdvantage Session";
+    const uniqueName = generateUniqueSessionName(defaultName);
+    
+    setSessionName(uniqueName)
     setRecordingTime(0)
     setLiveText("")
     setWordCount(0)
     setBookmarks([])
+    
+    // Store in localStorage
+    localStorage.setItem('lastSessionName', uniqueName);
 
     toast({
       title: "New Session Created",
       description: "Ready to start recording.",
     })
-  }, [recordingState, toast, sessionStore])
+  }, [recordingState, toast, generateUniqueSessionName])
 
   const saveTranscript = useCallback(() => {
     if (!liveText) {
@@ -888,26 +1036,47 @@ export default function RecordingTab() {
         {/* Header Row */}
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           {/* Session Name Field */}
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <Input
-              value={sessionName}
-              onChange={(e) => setSessionName(e.target.value)}
-              className="text-lg font-medium"
-              placeholder="Session Name"
-              onFocus={() => setIsEditingName(true)}
-              onBlur={() => setIsEditingName(false)}
-            />
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => {
-                const input = document.querySelector("input") as HTMLInputElement
-                input.focus()
-              }}
-              aria-label="Edit session name"
-            >
-              <Edit className="h-4 w-4" />
-            </Button>
+          <div className="flex flex-col gap-1 w-full sm:w-auto">
+            <div className="text-xs font-medium text-blue-600 dark:text-blue-400 ml-1 flex items-center gap-1">
+              <Mic className="h-3 w-3" /> Session Name
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                value={sessionName}
+                onChange={(e) => {
+                  setSessionName(e.target.value);
+                  // Save to localStorage but don't update the session store until blur
+                  localStorage.setItem('lastSessionName', e.target.value);
+                }}
+                className="text-xl font-semibold py-6 pl-4 shadow-sm bg-gradient-to-r from-blue-50 to-blue-100 dark:from-blue-950/50 dark:to-blue-900/30 text-blue-800 dark:text-blue-300 border-blue-200 dark:border-blue-800"
+                placeholder="Session Name"
+                onFocus={() => setIsEditingName(true)}
+                onBlur={() => {
+                  setIsEditingName(false);
+                  // Update the current session name when input is blurred
+                  const currentSession = sessionStore.currentSession;
+                  if (currentSession && currentSession.session_info.name !== sessionName) {
+                    sessionStore.updateSessionName(sessionName);
+                    toast({
+                      title: "Session Name Updated",
+                      description: `Session renamed to "${sessionName}"`,
+                    });
+                  }
+                }}
+              />
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => {
+                  const input = document.querySelector("input") as HTMLInputElement
+                  input.focus()
+                }}
+                aria-label="Edit session name"
+                className="h-12 w-12 bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800"
+              >
+                <Edit className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+              </Button>
+            </div>
           </div>
 
           {/* Quick Actions */}

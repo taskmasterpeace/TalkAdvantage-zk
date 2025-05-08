@@ -64,7 +64,6 @@ interface SettingsState {
 
   // Storage Settings
   storageLocation: StorageLocationType
-  maxStorageSize: string
 
   // Methods
   setTheme: (theme: ThemeOption) => void
@@ -79,7 +78,6 @@ interface SettingsState {
   setAIRefererURL: (url: string) => void
   setAISiteName: (name: string) => void
   setStorageLocation: (location: StorageLocationType) => void
-  setMaxStorageSize: (size: string) => void
 
   // System Props Methods
   setCuriosityEngineEnabled: (enabled: boolean) => void
@@ -229,7 +227,6 @@ Respond with ONLY the JSON object.`,
   },
 
   storageLocation: "local" as StorageLocationType,
-  maxStorageSize: "5",
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -249,7 +246,6 @@ export const useSettingsStore = create<SettingsState>()(
       setAIRefererURL: (aiRefererURL) => set({ aiRefererURL }),
       setAISiteName: (aiSiteName) => set({ aiSiteName }),
       setStorageLocation: (storageLocation) => set({ storageLocation }),
-      setMaxStorageSize: (maxStorageSize) => set({ maxStorageSize }),
 
       // System Props Methods
       setCuriosityEngineEnabled: (enabled) =>
@@ -485,7 +481,6 @@ export const useSettingsStore = create<SettingsState>()(
         aiSiteName: state.aiSiteName,
         systemProps: state.systemProps,
         storageLocation: state.storageLocation,
-        maxStorageSize: state.maxStorageSize,
       }),
     },
   ),

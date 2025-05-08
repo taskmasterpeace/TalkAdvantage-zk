@@ -11,20 +11,29 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast"
 import { AlertCircle, CheckCircle2, FileAudio } from "lucide-react"
 import { getSupabaseClient } from "@/lib/supabase/client"
+import { r2Service } from "@/lib/cloudflare/r2-service"
+import { indexedDBService } from "@/lib/indexeddb/indexed-db-service"
 
 interface TranscriptionProcessorProps {
   recordingId: string
-  onComplete: () => void
+  audioUrl?: string
+  isLocal?: boolean
+  onComplete?: () => void
 }
 
-export default function TranscriptionProcessor({ recordingId, onComplete }: TranscriptionProcessorProps) {
-  const [loading, setLoading] = useState(true)
+export default function TranscriptionProcessor({ 
+  recordingId, 
+  audioUrl = "", 
+  isLocal = false, 
+  onComplete 
+}: TranscriptionProcessorProps) {
+  const [loading, setLoading] = useState(!isLocal) // Skip loading for local since we already have audioUrl
   const [processing, setProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
-  const [recordingUrl, setRecordingUrl] = useState<string | null>(null)
-  const [recordingName, setRecordingName] = useState<string>("")
+  const [recordingUrl, setRecordingUrl] = useState<string | null>(isLocal ? audioUrl : null)
+  const [recordingName, setRecordingName] = useState<string>(isLocal ? "Local Recording" : "")
 
   // Transcription options
   const [enableSpeakerDetection, setEnableSpeakerDetection] = useState(true)
@@ -37,6 +46,28 @@ export default function TranscriptionProcessor({ recordingId, onComplete }: Tran
   const { toast } = useToast()
 
   useEffect(() => {
+    // Skip fetching for local recordings since we already have audioUrl
+    if (isLocal) {
+      console.log("TranscriptionProcessor - Using local mode for recording:", recordingId)
+      console.log("TranscriptionProcessor - Audio URL:", audioUrl ? audioUrl.substring(0, 30) + "..." : "none")
+      
+      // For local recordings, fetch the name if available
+      async function fetchLocalRecording() {
+        try {
+          const recording = await indexedDBService.getRecording(recordingId);
+          if (recording) {
+            setRecordingName(recording.name || "Local Recording");
+          }
+        } catch (error) {
+          console.error("Error fetching local recording name:", error);
+        }
+      }
+      
+      fetchLocalRecording();
+      setLoading(false);
+      return;
+    }
+
     async function fetchRecording() {
       try {
         const supabase = getSupabaseClient()
@@ -54,16 +85,14 @@ export default function TranscriptionProcessor({ recordingId, onComplete }: Tran
 
         setRecordingName(recording.name)
 
-        // Get signed URL for the audio file
-        const { data: urlData, error: urlError } = await supabase.storage
-          .from("audio-files")
-          .createSignedUrl(recording.storage_path, 3600) // 1 hour expiry
-
-        if (urlError) {
-          throw urlError
+        // Get signed URL from R2 storage instead of Supabase
+        try {
+          const url = await r2Service.getFileUrl(recording.storage_path)
+          setRecordingUrl(url)
+        } catch (r2Error) {
+          console.error("Error getting R2 URL:", r2Error)
+          throw new Error("Failed to get recording URL from storage")
         }
-
-        setRecordingUrl(urlData.signedUrl)
       } catch (error) {
         console.error("Error fetching recording:", error)
         setError("Failed to load recording details")
@@ -73,7 +102,7 @@ export default function TranscriptionProcessor({ recordingId, onComplete }: Tran
     }
 
     fetchRecording()
-  }, [recordingId])
+  }, [recordingId, isLocal, audioUrl])
 
   const handleProcess = async () => {
     if (!recordingUrl) {
@@ -97,7 +126,7 @@ export default function TranscriptionProcessor({ recordingId, onComplete }: Tran
         })
       }, 1000)
 
-      // Call the transcribe API
+      // Set up form data for transcription (same for both local and cloud)
       const formData = new FormData()
       formData.append("audioUrl", recordingUrl)
       formData.append("speakerLabels", enableSpeakerDetection.toString())
@@ -106,7 +135,9 @@ export default function TranscriptionProcessor({ recordingId, onComplete }: Tran
       formData.append("topicDetection", enableTopicDetection.toString())
       formData.append("summarization", enableSummarization.toString())
       formData.append("summaryType", summaryType)
+      formData.append("recordingId", recordingId)
 
+      // Call the transcribe API
       const response = await fetch("/api/transcribe", {
         method: "POST",
         body: formData,
@@ -120,63 +151,82 @@ export default function TranscriptionProcessor({ recordingId, onComplete }: Tran
       }
 
       const data = await response.json()
-
-      // Update the recording in the database
-      const supabase = getSupabaseClient()
-
-      // Create transcript entry
-      const { error: transcriptError } = await supabase.from("transcripts").insert({
-        recording_id: recordingId,
-        full_text: data.transcript,
-      })
-
-      if (transcriptError) {
-        throw transcriptError
-      }
-
-      // Create transcript segments if available
-      if (data.words && data.words.length > 0) {
-        const segments = data.words.map((word: any) => ({
-          transcript_id: data.transcriptId,
-          speaker: word.speaker || "Unknown",
-          start_ms: word.start,
-          end_ms: word.end,
-          text: word.text,
-        }))
-
-        const { error: segmentsError } = await supabase.from("transcript_segments").insert(segments)
-
-        if (segmentsError) {
-          console.error("Error inserting segments:", segmentsError)
-          // Continue even if segments insertion fails
+      
+      if (isLocal) {
+        // For local recordings, store in IndexedDB
+        try {
+          // Get the existing recording
+          const recording = await indexedDBService.getRecording(recordingId);
+          
+          if (!recording) {
+            throw new Error("Recording not found");
+          }
+          
+          // Use the specialized method to add transcript data
+          console.log("Adding transcript to local recording:", recordingId);
+          const updatedRecording = await indexedDBService.addTranscriptToRecording(
+            recordingId,
+            data.transcript,
+            data.summary
+          );
+          
+          if (updatedRecording) {
+            console.log("Successfully updated local recording with transcript:", {
+              id: updatedRecording.id,
+              isProcessed: updatedRecording.isProcessed,
+              hasTranscript: !!updatedRecording.transcript,
+              transcriptLength: updatedRecording.transcript?.length || 0
+            });
+          } else {
+            console.error("Failed to update recording with transcript - no recording returned");
+            throw new Error("Failed to update recording with transcript");
+          }
+        } catch (err) {
+          console.error("Error updating local recording with transcript:", err);
+          setError("Failed to save transcript data: " + String(err));
+          setProgress(0);
+          return;
+        }
+      } else {
+        // For cloud recordings, store in Supabase (processed by API)
+        const supabase = getSupabaseClient();
+        
+        // Create transcript segments if available
+        if (data.words && data.words.length > 0) {
+          const segments = data.words.map((word: any) => ({
+            transcript_id: data.transcriptId,
+            speaker: word.speaker || "Unknown",
+            start_ms: word.start,
+            end_ms: word.end,
+            text: word.text,
+          }));
+  
+          const { error: segmentsError } = await supabase.from("transcript_segments").insert(segments);
+  
+          if (segmentsError) {
+            console.error("Error inserting segments:", segmentsError);
+            // Continue even if segments insertion fails
+          }
         }
       }
 
-      // Update recording status
-      const { error: updateError } = await supabase
-        .from("recordings")
-        .update({
-          is_processed: true,
-          // Update duration if available
-          ...(data.duration_seconds && { duration_seconds: Math.ceil(data.duration_seconds) }),
-        })
-        .eq("id", recordingId)
-
-      if (updateError) {
-        throw updateError
-      }
-
+      // Update UI for success (same for both local and cloud)
       setProgress(100)
       setSuccess(true)
 
       toast({
-        title: "Transcription complete",
-        description: "Your recording has been successfully transcribed",
+        title: "Processing complete",
+        description: isLocal ? "Your local recording has been processed" : "Your recording has been successfully transcribed",
       })
 
       // Notify parent component
       setTimeout(() => {
-        onComplete()
+        if (onComplete) {
+          onComplete()
+        } else {
+          // Refresh the page when no callback is provided
+          window.location.reload()
+        }
       }, 2000)
     } catch (err) {
       console.error("Transcription error:", err)
@@ -212,7 +262,7 @@ export default function TranscriptionProcessor({ recordingId, onComplete }: Tran
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <FileAudio className="h-5 w-5 text-primary" />
-          Process Recording: {recordingName}
+          {isLocal ? "Process Recording" : "Transcribe Recording"}: {recordingName}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -228,7 +278,7 @@ export default function TranscriptionProcessor({ recordingId, onComplete }: Tran
           <Alert className="bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-900">
             <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400" />
             <AlertTitle className="text-green-600 dark:text-green-400">Success</AlertTitle>
-            <AlertDescription>Your recording has been successfully transcribed and processed.</AlertDescription>
+            <AlertDescription>Your recording has been successfully {isLocal ? "processed" : "transcribed and processed"}.</AlertDescription>
           </Alert>
         ) : (
           <>

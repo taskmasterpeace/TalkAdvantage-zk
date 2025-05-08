@@ -35,6 +35,7 @@ import {
   Compass,
   Sparkles,
   Mic,
+  Cloud,
 } from "lucide-react"
 import {
   useSettingsStore,
@@ -75,7 +76,6 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
     aiSiteName: settings.aiSiteName || "TalkAdvantage",
     systemProps: settings.systemProps,
     storageLocation: settings.storageLocation,
-    maxStorageSize: settings.maxStorageSize,
   })
 
   // Update local state when settings change
@@ -95,7 +95,6 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
         aiSiteName: settings.aiSiteName || "TalkAdvantage",
         systemProps: settings.systemProps,
         storageLocation: settings.storageLocation,
-        maxStorageSize: settings.maxStorageSize,
       })
 
       // Reset key status when opening modal
@@ -248,7 +247,9 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
     )
 
     settings.setStorageLocation(localSettings.storageLocation as StorageLocationType)
-    settings.setMaxStorageSize(localSettings.maxStorageSize)
+    
+    // Save storage location to cookie for server components to access
+    document.cookie = `storageLocation=${localSettings.storageLocation}; path=/; max-age=31536000; SameSite=Strict`;
 
     // Apply theme immediately
     if (localSettings.theme !== "system") {
@@ -288,7 +289,6 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
         aiSiteName: settings.aiSiteName || "TalkAdvantage",
         systemProps: settings.systemProps,
         storageLocation: settings.storageLocation,
-        maxStorageSize: settings.maxStorageSize,
       })
 
       toast({
@@ -1276,34 +1276,14 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
                       <SelectValue placeholder="Select location" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="local">Local Storage</SelectItem>
-                      <SelectItem value="cloud">Cloud Storage</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="text-lg font-medium">Storage Limits</h3>
-              <div className="grid gap-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label htmlFor="max-storage">Maximum Storage</Label>
-                    <div className="text-sm text-muted-foreground">Limit the amount of disk space used</div>
-                  </div>
-                  <Select
-                    value={localSettings.maxStorageSize}
-                    onValueChange={(value) => setLocalSettings({ ...localSettings, maxStorageSize: value })}
-                  >
-                    <SelectTrigger id="max-storage" className="w-[180px]">
-                      <SelectValue placeholder="Select size" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1">1 GB</SelectItem>
-                      <SelectItem value="5">5 GB</SelectItem>
-                      <SelectItem value="10">10 GB</SelectItem>
-                      <SelectItem value="unlimited">Unlimited</SelectItem>
+                      <SelectItem value="local" className="flex items-center gap-2">
+                        <Database className="h-4 w-4 text-blue-500" />
+                        <span>Local Storage</span>
+                      </SelectItem>
+                      <SelectItem value="cloud" className="flex items-center gap-2">
+                        <Cloud className="h-4 w-4 text-blue-500" />
+                        <span>Cloud Storage</span>
+                      </SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1313,15 +1293,6 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
             <div className="space-y-4">
               <h3 className="text-lg font-medium">Data Management</h3>
               <div className="grid gap-4">
-                <div className="p-4 border rounded-md bg-muted/30">
-                  <div className="flex justify-between items-center mb-2">
-                    <h4 className="font-medium">Current Usage</h4>
-                    <span className="text-sm">0.5 GB / 5 GB</span>
-                  </div>
-                  <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
-                    <div className="bg-primary h-full" style={{ width: "10%" }}></div>
-                  </div>
-                </div>
                 <Button variant="outline">Clear All Data</Button>
                 <Button variant="outline">Export All Data</Button>
               </div>
@@ -1330,16 +1301,21 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
         </Tabs>
 
         <div className="flex justify-between gap-2 mt-4">
-          <Button variant="outline" onClick={resetSettings} disabled={isResetting} className="gap-2">
+          <Button 
+            variant="outline" 
+            onClick={resetSettings} 
+            disabled={isResetting} 
+            className="gap-2 group bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/30 dark:to-indigo-900/30 border-blue-200 dark:border-blue-800 hover:border-blue-300 dark:hover:border-blue-700 text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-all shadow-sm hover:shadow"
+          >
             {isResetting ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Resetting...
+                <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                <span>Resetting...</span>
               </>
             ) : (
               <>
-                <RefreshCw className="h-4 w-4" />
-                Reset to Defaults
+                <RefreshCw className="h-4 w-4 group-hover:rotate-12 transition-transform duration-200 group-hover:text-blue-500" />
+                <span>Reset to Defaults</span>
               </>
             )}
           </Button>

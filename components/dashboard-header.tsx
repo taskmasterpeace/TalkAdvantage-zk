@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { Settings } from "lucide-react"
 import SettingsModal from "./settings-modal"
+import { PrivacyModeIndicator } from "./privacy-mode-indicator"
 
 export function DashboardHeader() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
@@ -11,9 +12,12 @@ export function DashboardHeader() {
     <>
       <header className="border-b border-border p-4">
         <div className="container flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-primary">
-            TalkAdvantage <span className="text-muted-foreground text-lg font-normal">AI Conversation Assistant</span>
-          </h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold text-primary">
+              TalkAdvantage <span className="text-muted-foreground text-lg font-normal">AI Conversation Assistant</span>
+            </h1>
+            <PrivacyModeIndicator />
+          </div>
           <div className="flex items-center gap-4">
             <button
               className="text-muted-foreground hover:text-primary transition-colors"
