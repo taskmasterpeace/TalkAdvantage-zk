@@ -37,7 +37,7 @@ export function RecordingHeatmap({
   const [selectedCell, setSelectedCell] = useState<{day: number, hour: number} | null>(null);
 
   // Get week date range for display
-  const getWeekDateRange = (weekNumber: number) => {
+  const getWeekDateRange = useMemo(() => (weekNumber: number) => {
     const currentDate = new Date();
     const currentYear = currentDate.getFullYear();
     const firstDayOfYear = new Date(currentYear, 0, 1);
@@ -53,24 +53,15 @@ export function RecordingHeatmap({
     const startOfWeek = new Date(firstSundayOfYear);
     startOfWeek.setDate(firstSundayOfYear.getDate() + (weekNumber - 1) * 7);
     
-    // If we're in the current week (or specified week contains today), adjust to contain today
-    const today = new Date();
-    const todayDay = today.getDay(); // 0-6, Sunday is 0
     const endOfWeek = new Date(startOfWeek);
     endOfWeek.setDate(startOfWeek.getDate() + 6);
-    
-    // Check if today falls within this week range
-    if (today >= startOfWeek && today <= endOfWeek) {
-      // This is the current week, no need to adjust
-      console.log("Current week detected", {weekNumber, start: startOfWeek, end: endOfWeek});
-    }
     
     return { 
       start: startOfWeek, 
       end: endOfWeek,
       formatted: `${format(startOfWeek, 'MMM d')} - ${format(endOfWeek, 'MMM d, yyyy')}`
     };
-  };
+  }, []); // Empty dependency array since this calculation doesn't depend on any props/state
   
   // Get recordings for current week
   const weekRecordings = useMemo(() => {

@@ -1,14 +1,18 @@
 "use client"
 
-import { useState, useEffect, useMemo } from "react"
+import { useState, useEffect, useMemo, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
-import { RefreshCw, ChevronLeft, ChevronRight, Search, FileAudio, Clock, Calendar, Download, FileText, MoreHorizontal, ArrowUpRight, CalendarCheck, Brain, Zap, Cloud, Database, ExternalLink, Settings, Moon, ArrowDownRight, FolderOpen } from "lucide-react"
+import { RefreshCw, ChevronLeft, ChevronRight, Search, FileAudio, Clock, Calendar, Download, FileText, MoreHorizontal, ArrowUpRight, CalendarCheck, Brain, Zap, Cloud, Database, ExternalLink, Settings, Moon, ArrowDownRight, FolderOpen, CalendarDays, Copy } from "lucide-react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { format, isWithinInterval, startOfDay, endOfDay } from "date-fns"
+import { Calendar as CalendarComponent } from "@/components/ui/calendar"
+import { type DateRange } from "react-day-picker"
 import MediaPlayer from "./media-player"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { formatDistanceToNow } from "date-fns"
@@ -18,6 +22,18 @@ import { unifiedRecordingsService } from "@/lib/recordings-service"
 import { useSettingsStore } from "@/lib/settings-store"
 import { indexedDBService } from "@/lib/indexeddb/indexed-db-service"
 import RecordingHeatmap from "./recording-heatmap"
+
+// Add useDebounce hook at the top after imports
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return debouncedValue;
+}
 
 // Update the downloadTranscript function to handle unprocessed recordings
 const downloadTranscript = async (recordingId: string, recordingName: string) => {
@@ -115,30 +131,53 @@ export default function LibraryTab() {
   const [selectedRecording, setSelectedRecording] = useState<Recording | null>(null)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
+  const debouncedSearchQuery = useDebounce(searchQuery, 300);
   const [showTranscriptDialog, setShowTranscriptDialog] = useState(false)
   const [currentTranscript, setCurrentTranscript] = useState<string | null>(null)
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false)
   const [currentTranscriptTitle, setCurrentTranscriptTitle] = useState("")
-  // Add state for transcript previews
   const [transcriptPreviews, setTranscriptPreviews] = useState<Record<string, string>>({})
   const [expandedRecordings, setExpandedRecordings] = useState<Record<string, boolean>>({})
-  // Get storage location from settings
   const storageLocation = useSettingsStore(state => state.storageLocation)
-  // Add sort state
   const [sortBy, setSortBy] = useState<"name" | "date">("date")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc")
   const [viewMode, setViewMode] = useState<"calendar" | "heatmap">("calendar")
-  
-  // Add duration filter states
   const [durationUnit, setDurationUnit] = useState<"seconds" | "minutes" | "hours">("minutes")
   const [durationRange, setDurationRange] = useState<{ min: string; max: string }>({ min: "", max: "" })
-  
-  // Week navigation state
   const [currentWeek, setCurrentWeek] = useState<number>(0)
   const [isWeekView, setIsWeekView] = useState<boolean>(false)
   const [selectedHourRecordings, setSelectedHourRecordings] = useState<Recording[]>([])
   const [selectedHourInfo, setSelectedHourInfo] = useState<{day: string, hour: number} | null>(null)
-  
+  const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined)
+  const [expandedAnalysis, setExpandedAnalysis] = useState<Record<string, boolean>>({})
+  const [hasDeepAnalysis, setHasDeepAnalysis] = useState<Record<string, boolean>>({})
+  // Add new state for search type
+  const [searchType, setSearchType] = useState<"filename" | "transcript" | "tags" | "interaction">("filename");
+  const [transcriptSearchResults, setTranscriptSearchResults] = useState<Record<string, boolean>>({});
+
+  // Add the copyAnalysisSummary function here, inside the component
+  const copyAnalysisSummary = (recording: Recording) => {
+    const summary = `Deep Analysis Summary for ${formatRecordingName(recording)}
+
+Duration: ${formatDuration(recording.duration_seconds)}
+Speakers: 2 detected
+Overall Sentiment: Positive
+
+Key Points:
+• Discussion about project timeline
+• Budget considerations
+• Team resource allocation`;
+
+    navigator.clipboard.writeText(summary)
+      .then(() => {
+        // You could add a toast notification here if you have one
+        console.log('Analysis summary copied to clipboard');
+      })
+      .catch(err => {
+        console.error('Failed to copy text: ', err);
+      });
+  };
+
   // Week number calculation
   const getWeekNumber = (date: Date): number => {
     const year = date.getFullYear();
@@ -285,11 +324,18 @@ export default function LibraryTab() {
     
     return recordings.filter((recording) => {
       const recordingDate = new Date(recording.created_at)
-      return (
-        recordingDate.getDate() === date.getDate() &&
+      const isOnDate = recordingDate.getDate() === date.getDate() &&
         recordingDate.getMonth() === date.getMonth() &&
         recordingDate.getFullYear() === date.getFullYear()
-      )
+      
+      // Check if recording is within selected date range
+      const isInRange = dateRange?.from && dateRange?.to ? 
+        isWithinInterval(recordingDate, { 
+          start: startOfDay(dateRange.from), 
+          end: endOfDay(dateRange.to) 
+        }) : true
+      
+      return isOnDate && isInRange
     })
   }
 
@@ -496,33 +542,168 @@ export default function LibraryTab() {
     });
   }
 
-  // Update filtered recordings to include duration filter
-  const filteredRecordings = recordings
-    .filter(recording => {
-      const formattedName = formatRecordingName(recording).toLowerCase();
-      return recording.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        formattedName.includes(searchQuery.toLowerCase()) ||
-        (recording.description && recording.description.toLowerCase().includes(searchQuery.toLowerCase()))
-    })
-    .filter(recording => filterByDurationRange([recording]).length > 0);
+  // Memoize the basic search function
+  const performBasicSearch = useCallback((recording: Recording, query: string): boolean => {
+    const searchTerm = query.toLowerCase();
+    return (
+      recording.name.toLowerCase().includes(searchTerm) ||
+      formatRecordingName(recording).toLowerCase().includes(searchTerm) ||
+      (recording.description?.toLowerCase().includes(searchTerm) ?? false)
+    );
+  }, []);
 
-  // Update filtered date recordings as well
-  const filteredDateRecordings = useMemo(() => {
-    const sourceRecordings = selectedHourRecordings.length > 0 ? 
-      selectedHourRecordings : 
-      (isWeekView && viewMode === "heatmap" ? 
-        getRecordingsForWeek(currentWeek) : 
-        getRecordingsForDate(selectedDate));
+  // Memoize transcript search function
+  const searchInTranscripts = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      setTranscriptSearchResults({});
+      return;
+    }
+
+    const results: Record<string, boolean> = {};
     
-    return sourceRecordings
-      .filter(recording => {
-        const formattedName = formatRecordingName(recording).toLowerCase();
-        return recording.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          formattedName.includes(searchQuery.toLowerCase()) ||
-          (recording.description && recording.description.toLowerCase().includes(searchQuery.toLowerCase()))
-      })
-      .filter(recording => filterByDurationRange([recording]).length > 0);
-  }, [selectedHourRecordings, isWeekView, currentWeek, selectedDate, searchQuery, recordings, viewMode, durationRange, durationUnit]);
+    // Search in loaded transcript previews first for immediate results
+    Object.entries(transcriptPreviews).forEach(([recordingId, transcript]) => {
+      if (transcript.toLowerCase().includes(query.toLowerCase())) {
+        results[recordingId] = true;
+      }
+    });
+
+    // Update results immediately with what we have
+    setTranscriptSearchResults(results);
+
+    // Then search unloaded transcripts
+    const unloadedRecordings = recordings.filter(
+      rec => rec.is_processed && !transcriptPreviews[rec.id]
+    );
+
+    for (const recording of unloadedRecordings) {
+      try {
+        if (storageLocation === "local") {
+          const localRecording = await indexedDBService.getRecording(recording.id);
+          if (localRecording?.transcript) {
+            if (localRecording.transcript.toLowerCase().includes(query.toLowerCase())) {
+              results[recording.id] = true;
+            }
+            // Update transcript previews
+            setTranscriptPreviews(prev => ({
+              ...prev,
+              [recording.id]: localRecording.transcript 
+                ? localRecording.transcript.substring(0, 150) + 
+                  (localRecording.transcript.length > 150 ? "..." : "")
+                : "No transcript available"
+            }));
+          }
+        } else {
+          const supabase = getSupabaseClient();
+          const { data, error } = await supabase
+            .from("transcripts")
+            .select("full_text")
+            .eq("recording_id", recording.id)
+            .single();
+          
+          if (!error && data?.full_text) {
+            if (data.full_text.toLowerCase().includes(query.toLowerCase())) {
+              results[recording.id] = true;
+            }
+            // Update transcript previews
+            setTranscriptPreviews(prev => ({
+              ...prev,
+              [recording.id]: data.full_text.substring(0, 150) + 
+                (data.full_text.length > 150 ? "..." : "")
+            }));
+          }
+        }
+      } catch (error) {
+        console.error("Error searching transcript:", error);
+      }
+    }
+
+    // Update results again with any new findings
+    setTranscriptSearchResults(results);
+  }, [recordings, transcriptPreviews, storageLocation]);
+
+  // Update search effect to use debounced value
+  useEffect(() => {
+    if (searchType === "transcript") {
+      searchInTranscripts(debouncedSearchQuery);
+    }
+  }, [debouncedSearchQuery, searchType, searchInTranscripts]);
+
+  // Memoize date range check
+  const isDateInRange = useCallback((date: Date) => {
+    if (!dateRange?.from || !dateRange?.to) return true;
+    return isWithinInterval(date, {
+      start: startOfDay(dateRange.from),
+      end: endOfDay(dateRange.to)
+    });
+  }, [dateRange]);
+
+  // Memoize duration check
+  const isDurationInRange = useCallback((duration: number) => {
+    if (!durationRange.min && !durationRange.max) return true;
+    const durationInUnit = getDurationInUnit(duration, durationUnit);
+    const min = durationRange.min ? parseFloat(durationRange.min) : 0;
+    const max = durationRange.max ? parseFloat(durationRange.max) : Infinity;
+    return durationInUnit >= min && durationInUnit <= max;
+  }, [durationRange, durationUnit]);
+
+  // Optimize filtered recordings with memoization
+  const filteredRecordings = useMemo(() => {
+    return recordings.filter(recording => {
+      // Check date range first (most efficient)
+      if (!isDateInRange(new Date(recording.created_at))) return false;
+
+      // Check duration next
+      if (!isDurationInRange(recording.duration_seconds)) return false;
+
+      // Finally check search (most expensive)
+      if (searchType === "transcript") {
+        return debouncedSearchQuery.trim() === "" || Boolean(transcriptSearchResults[recording.id]);
+      }
+      return performBasicSearch(recording, debouncedSearchQuery);
+    });
+  }, [
+    recordings,
+    isDateInRange,
+    isDurationInRange,
+    searchType,
+    debouncedSearchQuery,
+    transcriptSearchResults,
+    performBasicSearch
+  ]);
+
+  // Optimize date filtered recordings
+  const filteredDateRecordings = useMemo(() => {
+    const baseRecordings = selectedHourRecordings.length > 0
+      ? selectedHourRecordings
+      : isWeekView && viewMode === "heatmap"
+        ? getRecordingsForWeek(currentWeek)
+        : selectedDate
+          ? getRecordingsForDate(selectedDate)
+          : [];
+
+    return baseRecordings.filter(recording => {
+      // Check duration first
+      if (!isDurationInRange(recording.duration_seconds)) return false;
+
+      // Then check search
+      if (searchType === "transcript") {
+        return debouncedSearchQuery.trim() === "" || Boolean(transcriptSearchResults[recording.id]);
+      }
+      return performBasicSearch(recording, debouncedSearchQuery);
+    });
+  }, [
+    selectedHourRecordings,
+    isWeekView,
+    viewMode,
+    currentWeek,
+    selectedDate,
+    isDurationInRange,
+    searchType,
+    debouncedSearchQuery,
+    transcriptSearchResults,
+    performBasicSearch
+  ]);
 
   // Apply sorting to recordings
   const sortedFilteredRecordings = [...filteredRecordings].sort((a, b) => {
@@ -583,6 +764,15 @@ export default function LibraryTab() {
       const date = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), i)
       const isToday = new Date().toDateString() === date.toDateString()
       const isSelected = selectedDate?.toDateString() === date.toDateString()
+      
+      // Check if date is in selected range from date picker
+      const isInDateRange = dateRange?.from && dateRange?.to && 
+        isWithinInterval(date, { 
+          start: startOfDay(dateRange.from), 
+          end: endOfDay(dateRange.to) 
+        });
+      const isRangeStart = dateRange?.from && date.toDateString() === dateRange.from.toDateString();
+      const isRangeEnd = dateRange?.to && date.toDateString() === dateRange.to.toDateString();
 
       // Get recording stats for this day
       const dayStats = recordingsCountByDate.get(i) || { total: 0, processed: 0, unprocessed: 0 }
@@ -619,28 +809,31 @@ export default function LibraryTab() {
             ${isToday ? "bg-blue-100/50 dark:bg-blue-900/30 border-blue-300 dark:border-blue-700" : "border-border"}
             ${isSelected ? "ring-2 ring-primary shadow-md" : "shadow-sm hover:shadow"}
             ${hasRecordings ? "border-blue-200 dark:border-blue-800" : ""}
+            ${isInDateRange ? "bg-indigo-50 dark:bg-indigo-900/20" : ""}
+            ${isRangeStart ? "border-l-2 border-l-indigo-500" : ""}
+            ${isRangeEnd ? "border-r-2 border-r-indigo-500" : ""}
           `}
           onClick={() => {
-            // When selecting a calendar date, clear hour selections
+            setSelectedDate(date);
             setSelectedHourRecordings([]);
             setSelectedHourInfo(null);
-            setSelectedDate(date);
           }}
         >
-          <div className="flex justify-between items-center">
-            <div className="flex items-center gap-0.5">
-              <span className={`text-[10px] font-medium ${isToday ? "text-white bg-primary h-4 w-4 flex items-center justify-center rounded-full" : ""}`}>
-                {i}
+          <div className="flex items-center gap-0.5">
+            <span className={`text-[10px] font-medium 
+              ${isToday ? "text-white bg-primary h-4 w-4 flex items-center justify-center rounded-full" : ""}
+              ${isInDateRange ? "text-indigo-700 dark:text-indigo-300" : ""}
+              ${(isRangeStart || isRangeEnd) ? "text-indigo-800 dark:text-indigo-200 font-semibold" : ""}
+            `}>
+              {i}
+            </span>
+            {isToday && !isSelected && (
+              <span className="text-[7px] text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/40 px-0.5 rounded-sm">Today</span>
+            )}
+            {(isRangeStart || isRangeEnd) && (
+              <span className="text-[7px] text-indigo-600 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-900/40 px-0.5 rounded-sm">
+                {isRangeStart ? 'Start' : 'End'}
               </span>
-              {isToday && !isSelected && (
-                <span className="text-[7px] text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/40 px-0.5 rounded-sm">Today</span>
-              )}
-            </div>
-            {hasRecordings && (
-              <div className={`flex items-center gap-0.5 ${indicatorBgClass} px-1 py-0.5 rounded-full`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${indicatorColorClass} border border-white/50 dark:border-gray-800/50`}></span>
-                <span className={`text-[8px] font-medium ${indicatorTextClass}`}>{recordingsCount}</span>
-              </div>
             )}
           </div>
           
@@ -669,7 +862,7 @@ export default function LibraryTab() {
               </div>
             </div>
           )}
-          
+
           {/* Tooltip-like hover effect */}
           <div className="absolute inset-0 bg-white/90 dark:bg-slate-900/90 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-center justify-center p-1 text-center">
             <div className="text-[10px] font-medium">
@@ -681,7 +874,7 @@ export default function LibraryTab() {
                 <div className="text-[7px] mt-0.5">
                   <span className="text-green-600 dark:text-green-400">{processedCount} processed</span>
                   {unprocessedCount > 0 && (
-                    <span className="text-yellow-600 dark:text-yellow-400"> • {unprocessedCount} UnProceesed</span>
+                    <span className="text-yellow-600 dark:text-yellow-400"> • {unprocessedCount} Unprocessed</span>
                   )}
                 </div>
               </div>
@@ -775,15 +968,15 @@ export default function LibraryTab() {
         try {
           const localRecording = await indexedDBService.getRecording(recordingId);
           
-          if (localRecording?.transcript) {
+          if (localRecording && typeof localRecording.transcript === 'string') {
             console.log("Found local transcript for preview");
             // Get the first 150 characters as a preview
-            const previewText = localRecording.transcript.substring(0, 150) + 
+            const preview = localRecording.transcript.substring(0, 150) + 
               (localRecording.transcript.length > 150 ? "..." : "");
-              
+            
             setTranscriptPreviews(prev => ({
               ...prev,
-              [recordingId]: previewText
+              [recordingId]: preview
             }));
           } else {
             console.log("No local transcript found for preview");
@@ -1130,8 +1323,226 @@ export default function LibraryTab() {
     return `${h} ${ampm}`;
   };
 
+  // Add date range handler
+  const handleDateRangeSelect = (range: { from: Date | undefined; to: Date | undefined } | undefined) => {
+    if (range) {
+      setDateRange(range);
+    } else {
+      setDateRange({ from: undefined, to: undefined });
+    }
+  };
+
+  // Add effect to update selected date when date range changes
+  useEffect(() => {
+    if (dateRange?.from) {
+      setSelectedDate(dateRange.from);
+    }
+  }, [dateRange]);
+
+  // Toggle Deep Analysis panel
+  const toggleAnalysisPanel = (recordingId: string) => {
+    setExpandedAnalysis(prev => {
+      const newState = {
+        ...prev,
+        [recordingId]: !prev[recordingId]
+      };
+      return newState;
+    });
+  };
+
+  // Modify the recording item rendering to include Deep Analysis panel
+  const renderRecordingItem = (recording: Recording, isDateView: boolean = false) => (
+    <div 
+      key={recording.id}
+      className={`border-b border-slate-200 dark:border-slate-800 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-900/30 transition-colors 
+        ${selectedRecording?.id === recording.id ? 'bg-blue-50 dark:bg-blue-900/20' : ''}`}
+      onClick={(e) => {
+        e.preventDefault();
+        setSelectedRecording(recording);
+      }}
+    >
+      <div className="flex items-center gap-0.5 px-2 py-1">
+        <span className="text-slate-500 text-[10px]">♪</span>
+        <span className="text-[10px] font-medium text-slate-700 dark:text-slate-300 truncate mr-auto">{formatRecordingName(recording)}</span>
+        
+        <span className={`h-1 w-1 rounded-full flex-shrink-0 ${recording.is_processed ? 'bg-green-500' : 'bg-yellow-500'} mx-0.5`} title={recording.is_processed ? "Processed" : "Not processed"} />
+        
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <span className="text-[8px] text-slate-500 dark:text-slate-400 flex items-center">
+            <Clock className="mr-0.5 h-2 w-2" />
+            {recording.duration_seconds > 0 ? formatDuration(recording.duration_seconds) : "..."}
+          </span>
+          
+          <span className="text-[8px] text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/20 px-1 rounded-sm border border-slate-200 dark:border-slate-800 flex-shrink-0">
+            {formatExactDate(recording.created_at)}
+          </span>
+          
+          {recording.is_processed && (
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              className="h-4 w-4 p-0 flex-shrink-0"
+              title="Show/hide transcript preview"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleTranscriptPreview(recording.id, recording.is_processed);
+              }}
+            >
+              <FileText className="h-2.5 w-2.5 text-slate-500" />
+            </Button>
+          )}
+
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            className="h-4 w-4 p-0 flex-shrink-0"
+            title="Show/hide Deep Analysis"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleAnalysisPanel(recording.id);
+            }}
+          >
+            <Brain className={`h-2.5 w-2.5 text-slate-500 transition-transform duration-200 ${expandedAnalysis[recording.id] ? 'rotate-180' : ''}`} />
+          </Button>
+
+          <Link 
+            href={`/dashboard/recordings/${recording.id}`} 
+            className="text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/30 p-0.5 rounded-sm flex items-center justify-center h-4 w-4 flex-shrink-0"
+            onClick={(e) => {
+              e.stopPropagation()
+            }}
+            title="View Details"
+          >
+            <ExternalLink className="h-3 w-3" />
+          </Link>
+          
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-4 w-4 p-0.5 hover:bg-slate-100 dark:hover:bg-slate-800/30 rounded-sm flex items-center justify-center flex-shrink-0"
+                onClick={(e) => {
+                  e.stopPropagation()
+                }}
+                title="View Options"
+              >
+                <Settings className="h-3 w-3" />
+              </Button>
+            </DialogTrigger>
+            <RecordingOptionsModal recording={recording} />
+          </Dialog>
+        </div>
+      </div>
+      
+      {/* Transcript Preview */}
+      {expandedRecordings[recording.id] && recording.is_processed && (
+        <div className="bg-slate-50 dark:bg-slate-900/20 p-3 border-t border-slate-200 dark:border-slate-800 mx-1">
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-sm font-medium text-slate-800 dark:text-slate-200 flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              Transcript Preview
+            </h4>
+          </div>
+          {transcriptPreviews[recording.id] ? (
+            <p className="text-sm leading-relaxed text-slate-600 dark:text-slate-400">{transcriptPreviews[recording.id]}</p>
+          ) : (
+            <div className="flex items-center justify-center py-2">
+              <div className="animate-spin h-4 w-4 border-2 border-slate-500 rounded-full border-t-transparent"></div>
+              <span className="ml-2 text-sm text-slate-600 dark:text-slate-400">Loading transcript...</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Deep Analysis Panel */}
+      {expandedAnalysis[recording.id] && (
+        <div className="bg-blue-50 dark:bg-blue-900/20 p-3 border-t border-blue-200 dark:border-blue-800 mx-1">
+          {!recording.is_processed ? (
+            <div className="flex flex-col items-center justify-center py-2">
+              <p className="text-sm text-blue-700 dark:text-blue-300 mb-2">Start Deep Analysis</p>
+              <Link
+                href={`/dashboard/recordings/${recording.id}`}
+                className="flex items-center gap-2 bg-blue-100 dark:bg-blue-800 hover:bg-blue-200 dark:hover:bg-blue-700 text-blue-700 dark:text-blue-200 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <Brain className="h-4 w-4" />
+                Run Deep Analysis
+              </Link>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-medium text-blue-800 dark:text-blue-200 flex items-center gap-2">
+                  <Brain className="h-4 w-4" />
+                  Deep Analysis Summary
+                </h4>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      // Add refresh logic here
+                    }}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5 text-blue-600" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-6 w-6 p-0"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      copyAnalysisSummary(recording);
+                    }}
+                    title="Copy summary to clipboard"
+                  >
+                    <Copy className="h-3.5 w-3.5 text-blue-600" />
+                  </Button>
+                </div>
+              </div>
+              
+              {/* Mock summary content for processed recordings */}
+              <div className="text-sm space-y-1.5">
+                <p className="text-blue-700 dark:text-blue-300">
+                  <span className="font-medium">Duration:</span> {formatDuration(recording.duration_seconds)}
+                </p>
+                <p className="text-blue-700 dark:text-blue-300">
+                  <span className="font-medium">Speakers:</span> 2 detected
+                </p>
+                <p className="text-blue-700 dark:text-blue-300">
+                  <span className="font-medium">Overall Sentiment:</span> Positive
+                </p>
+                <p className="text-blue-700 dark:text-blue-300">
+                  <span className="font-medium">Key Points:</span>
+                </p>
+                <ul className="list-disc list-inside text-blue-600 dark:text-blue-400 pl-2">
+                  <li>Discussion about project timeline</li>
+                  <li>Budget considerations</li>
+                  <li>Team resource allocation</li>
+                </ul>
+                <div className="pt-2">
+                  <Link
+                    href={`/dashboard/recordings/${recording.id}`}
+                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    View Full Analysis
+                  </Link>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Recording Statistics */}
       <div className="p-3 bg-gradient-to-br from-emerald-50/80 via-slate-50/90 to-teal-50/80 dark:from-emerald-900/20 dark:via-slate-900/40 dark:to-teal-900/20 rounded-lg border border-emerald-200/50 dark:border-emerald-800/30 shadow-sm">
         <div className="flex items-center justify-between gap-4">
@@ -1229,6 +1640,142 @@ export default function LibraryTab() {
                 {storageLocation === "local" ? "Local" : "Cloud"}
               </span>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Search Bar - Full Width */}
+      <div className="relative flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-2.5 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
+          <Input 
+            placeholder={`Search ${searchType === "filename" ? "file names" : 
+              searchType === "transcript" ? "transcript contents" :
+              searchType === "tags" ? "tags" : "interactions"}...`}
+            className="pl-8 h-7 text-xs bg-white dark:bg-slate-900 border-blue-200 dark:border-blue-800" 
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+        
+        <select
+          className="h-7 text-xs bg-white dark:bg-slate-900 border border-blue-200 dark:border-blue-800 rounded-md px-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          value={searchType}
+          onChange={(e) => setSearchType(e.target.value as "filename" | "transcript" | "tags" | "interaction")}
+        >
+          <option value="filename">File Name</option>
+          <option value="transcript">Transcript</option>
+          <option value="tags">Tags</option>
+          <option value="interaction">Interaction</option>
+        </select>
+      </div>
+
+      {/* Global Filters Row */}
+      <div className="flex items-center gap-3 bg-white dark:bg-slate-900 py-2 px-3 rounded-lg border border-blue-200 dark:border-blue-800 shadow-sm">
+        {/* Date Range Filter */}
+        <div className="flex items-center gap-2 flex-1">
+          <div className="flex items-center gap-1">
+            <CalendarDays className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+            <span className="text-xs font-medium">Date Range</span>
+          </div>
+          
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                className={`h-6 text-xs justify-start text-left font-normal ${!dateRange?.from && "text-muted-foreground"}`}
+              >
+                <CalendarCheck className="mr-1 h-3 w-3" />
+                {dateRange?.from ? (
+                  dateRange.to ? (
+                    <>
+                      {format(dateRange.from, "LLL dd, y")} - {format(dateRange.to, "LLL dd, y")}
+                    </>
+                  ) : (
+                    format(dateRange.from, "LLL dd, y")
+                  )
+                ) : (
+                  <span>Pick a date range</span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0" align="start">
+              <CalendarComponent
+                initialFocus
+                mode="range"
+                defaultMonth={dateRange?.from}
+                selected={dateRange}
+                onSelect={setDateRange}
+                numberOfMonths={2}
+              />
+            </PopoverContent>
+          </Popover>
+
+          {dateRange?.from && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-6 px-2 text-xs"
+              onClick={() => {
+                setDateRange(undefined)
+                setSelectedDate(null)
+              }}
+            >
+              Reset
+            </Button>
+          )}
+        </div>
+
+        {/* Vertical Divider */}
+        <div className="h-5 w-px bg-blue-200 dark:bg-blue-800"></div>
+
+        {/* Duration Filter */}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
+            <Clock className="h-3 w-3 text-blue-600 dark:text-blue-400" />
+            <span className="text-xs font-medium">Duration</span>
+          </div>
+          
+          <div className="flex items-center gap-1.5">
+            <select
+              className="h-6 text-xs bg-white dark:bg-slate-900 border border-blue-200 dark:border-blue-800 rounded-md px-1.5 py-0 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              value={durationUnit}
+              onChange={(e) => setDurationUnit(e.target.value as "seconds" | "minutes" | "hours")}
+            >
+              <option value="seconds">Sec</option>
+              <option value="minutes">Min</option>
+              <option value="hours">Hr</option>
+            </select>
+
+            <div className="flex items-center gap-1">
+              <Input
+                type="number"
+                placeholder="Min"
+                className="w-16 h-6 text-xs bg-white dark:bg-slate-900 border-blue-200 dark:border-blue-800"
+                value={durationRange.min}
+                onChange={(e) => setDurationRange(prev => ({ ...prev, min: e.target.value }))}
+              />
+              <span className="text-blue-600 dark:text-blue-400">-</span>
+              <Input
+                type="number"
+                placeholder="Max"
+                className="w-16 h-6 text-xs bg-white dark:bg-slate-900 border-blue-200 dark:border-blue-800"
+                value={durationRange.max}
+                onChange={(e) => setDurationRange(prev => ({ ...prev, max: e.target.value }))}
+              />
+            </div>
+
+            {(durationRange.min || durationRange.max) && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs hover:bg-blue-100/50 dark:hover:bg-blue-900/30 text-blue-600 dark:text-blue-400"
+                onClick={() => setDurationRange({ min: "", max: "" })}
+              >
+                Reset
+              </Button>
+            )}
           </div>
         </div>
       </div>
@@ -1485,73 +2032,6 @@ export default function LibraryTab() {
             <div className="p-2">
               {/* Search and Filters */}
               <div className="space-y-3 mb-4">
-                {/* Search Input */}
-          <div className="relative">
-                  <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input 
-                    placeholder="Search files..." 
-                    className="pl-8" 
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                  />
-            </div>
-
-                {/* Duration Range Filter */}
-                <div className="flex flex-wrap items-center gap-3 p-2 bg-gradient-to-r from-emerald-50/80 to-teal-50/80 dark:from-emerald-950/40 dark:to-teal-950/40 rounded-lg border border-emerald-100 dark:border-emerald-900 shadow-sm">
-                  <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
-                      <Clock className="h-3.5 w-3.5" />
-                      <span className="text-xs font-medium">Duration Filter</span>
-          </div>
-                    <select
-                      className="text-xs bg-white dark:bg-slate-900 border border-emerald-200 dark:border-emerald-800 rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500 dark:focus:ring-emerald-600"
-                      value={durationUnit}
-                      onChange={(e) => setDurationUnit(e.target.value as "seconds" | "minutes" | "hours")}
-                    >
-                      <option value="seconds">Seconds</option>
-                      <option value="minutes">Minutes</option>
-                      <option value="hours">Hours</option>
-                    </select>
-          </div>
-
-                  <div className="flex items-center gap-2 flex-1">
-                    <div className="flex items-center gap-1.5 min-w-[140px]">
-                      <Input
-                        type="number"
-                        placeholder="Min"
-                        className="w-16 h-7 text-xs bg-white dark:bg-slate-900 border-blue-200 dark:border-blue-800"
-                        value={durationRange.min}
-                        onChange={(e) => setDurationRange(prev => ({ ...prev, min: e.target.value }))}
-                      />
-                      <span className="text-blue-600 dark:text-blue-400">-</span>
-                      <Input
-                        type="number"
-                        placeholder="Max"
-                        className="w-16 h-7 text-xs bg-white dark:bg-slate-900 border-blue-200 dark:border-blue-800"
-                        value={durationRange.max}
-                        onChange={(e) => setDurationRange(prev => ({ ...prev, max: e.target.value }))}
-                      />
-        </div>
-
-                    {(durationRange.min || durationRange.max) && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 px-2 text-xs hover:bg-blue-100/50 dark:hover:bg-blue-900/30 text-blue-600 dark:text-blue-400"
-                        onClick={() => setDurationRange({ min: "", max: "" })}
-                      >
-                        Clear
-                      </Button>
-                    )}
-                  </div>
-
-                  {(durationRange.min || durationRange.max) && (
-                    <div className="text-[10px] text-blue-600 dark:text-blue-400 bg-blue-100/50 dark:bg-blue-900/30 px-2 py-0.5 rounded-full border border-blue-200 dark:border-blue-800">
-                      {`${durationRange.min || '0'} - ${durationRange.max || '∞'} ${durationUnit}`}
-                    </div>
-                  )}
-                </div>
-
                 {/* Sort Controls */}
                 <div className="flex justify-between items-center">
                   <div className="text-xs text-muted-foreground">
@@ -1635,92 +2115,7 @@ export default function LibraryTab() {
                       </div>
                     )}
                     
-                    {sortedFilteredDateRecordings.map((recording) => (
-                      <div 
-                        key={recording.id}
-                        className={`border-b border-slate-200 dark:border-slate-800 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-900/30 transition-colors 
-                          ${selectedRecording?.id === recording.id ? 'bg-blue-50 dark:bg-blue-900/20' : ''}`}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          setSelectedRecording(recording);
-                        }}
-                      >
-                        <div className="flex items-center gap-0.5 px-2 py-1">
-                          <span className="text-slate-500 text-[10px]">♪</span>
-                          <span className="text-[10px] font-medium text-slate-700 dark:text-slate-300 truncate mr-auto">{formatRecordingName(recording)}</span>
-                          
-                          <span className={`h-1 w-1 rounded-full flex-shrink-0 ${recording.is_processed ? 'bg-green-500' : 'bg-yellow-500'} mx-0.5`} title={recording.is_processed ? "Processed" : "Not processed"} />
-                          
-                          <div className="flex items-center gap-1 flex-shrink-0">
-                            <span className="text-[8px] text-slate-500 dark:text-slate-400 flex items-center">
-                              <Clock className="mr-0.5 h-2 w-2" />
-                              {recording.duration_seconds > 0 ? formatDuration(recording.duration_seconds) : "..."}
-                            </span>
-                            
-                            <span className="text-[8px] text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/20 px-1 rounded-sm border border-slate-200 dark:border-slate-800 flex-shrink-0">
-                              {formatExactDate(recording.created_at)}
-                            </span>
-                            
-                            {recording.is_processed && (
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                className="h-4 w-4 p-0 flex-shrink-0"
-                                title="Show/hide transcript preview"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleTranscriptPreview(recording.id, recording.is_processed);
-                                }}
-                              >
-                                <FileText className="h-2.5 w-2.5 text-slate-500" />
-                              </Button>
-                            )}
-                            
-                            <Link 
-                              href={`/dashboard/recordings/${recording.id}`} 
-                              className="text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/30 p-0.5 rounded-sm flex items-center justify-center h-4 w-4 flex-shrink-0"
-                              onClick={(e) => {
-                                e.stopPropagation() // Prevent also selecting the recording
-                              }}
-                              title="View Details"
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                            </Link>
-                            
-                            <Dialog>
-                              <DialogTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-4 w-4 p-0.5 hover:bg-slate-100 dark:hover:bg-slate-800/30 rounded-sm flex items-center justify-center flex-shrink-0"
-                                  onClick={(e) => {
-                                    e.stopPropagation() // Prevent also selecting the recording
-                                  }}
-                                  title="View Options"
-                                >
-                                  <Settings className="h-3 w-3" />
-                                </Button>
-                              </DialogTrigger>
-                              <RecordingOptionsModal recording={recording} />
-                            </Dialog>
-                          </div>
-                        </div>
-                        
-                        {/* Transcript Preview */}
-                        {expandedRecordings[recording.id] && recording.is_processed && (
-                          <div className="text-[8px] text-slate-600 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/20 p-0.5 border-t border-slate-200 dark:border-slate-800 mx-1">
-                            {transcriptPreviews[recording.id] ? (
-                              <p className="leading-tight">{transcriptPreviews[recording.id]}</p>
-                            ) : (
-                              <div className="flex items-center justify-center py-0.5">
-                                <div className="animate-spin h-1.5 w-1.5 border border-primary rounded-full border-t-transparent"></div>
-                                <span className="ml-1">Loading transcript...</span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                    {sortedFilteredDateRecordings.map((recording) => renderRecordingItem(recording, true))}
                   </div>
                 ) : (
                   <div className="flex items-center justify-center h-full text-muted-foreground">
@@ -1746,92 +2141,7 @@ export default function LibraryTab() {
                   </div>
                 ) : sortedFilteredRecordings.length > 0 ? (
                   <div className="space-y-2">
-                    {sortedFilteredRecordings.map((recording) => (
-                      <div 
-                        key={recording.id}
-                        className={`border-b border-slate-200 dark:border-slate-800 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-900/30 transition-colors 
-                          ${selectedRecording?.id === recording.id ? 'bg-emerald-50 dark:bg-emerald-900/20' : ''}`}
-                        onClick={(e) => {
-                          e.preventDefault();
-                          setSelectedRecording(recording);
-                        }}
-                      >
-                        <div className="flex items-center gap-1 px-2 py-0.5">
-                          <span className="text-emerald-500">♪</span>
-                          <span className="text-[10px] font-medium text-slate-700 dark:text-slate-300 truncate mr-auto">{formatRecordingName(recording)}</span>
-                          
-                          <span className={`h-1 w-1 rounded-full flex-shrink-0 ${recording.is_processed ? 'bg-emerald-500' : 'bg-yellow-500'} mx-1`} title={recording.is_processed ? "Processed" : "Not processed"} />
-                          
-                          <div className="flex items-center gap-1 flex-shrink-0">
-                            <span className="text-[8px] text-slate-500 dark:text-slate-400 flex items-center">
-                              <Clock className="mr-0.5 h-2 w-2" />
-                              {recording.duration_seconds > 0 ? formatDuration(recording.duration_seconds) : "..."}
-                            </span>
-                            
-                            <span className="text-[8px] text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-900/20 px-1 rounded-sm border border-slate-200 dark:border-slate-800 flex-shrink-0">
-                              {formatExactDate(recording.created_at)}
-                            </span>
-                            
-                            {recording.is_processed && (
-                              <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                className="h-4 w-4 p-0 flex-shrink-0 hover:bg-emerald-100 dark:hover:bg-emerald-900/30"
-                                title="Show/hide transcript preview"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  toggleTranscriptPreview(recording.id, recording.is_processed);
-                                }}
-                              >
-                                <FileText className="h-2.5 w-2.5 text-emerald-500" />
-                              </Button>
-                            )}
-                            
-                            <Link 
-                              href={`/dashboard/recordings/${recording.id}`} 
-                              className="text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-800/30 p-1 rounded-sm flex items-center justify-center h-5 w-5 flex-shrink-0"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                              }}
-                              title="View Details"
-                            >
-                              <ExternalLink className="h-3.5 w-3.5" />
-                            </Link>
-                            
-                            <Dialog>
-                              <DialogTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-5 w-5 p-1 hover:bg-emerald-100 dark:hover:bg-emerald-800/30 rounded-sm flex items-center justify-center flex-shrink-0"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                  }}
-                                  title="View Options"
-                                >
-                                  <Settings className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-                                </Button>
-                              </DialogTrigger>
-                              <RecordingOptionsModal recording={recording} />
-                            </Dialog>
-                          </div>
-                        </div>
-                        
-                        {/* Transcript Preview */}
-                        {expandedRecordings[recording.id] && recording.is_processed && (
-                          <div className="text-[9px] text-slate-600 dark:text-slate-400 bg-emerald-50 dark:bg-emerald-900/20 p-1 border-t border-emerald-200 dark:border-emerald-800 mx-1">
-                            {transcriptPreviews[recording.id] ? (
-                              <p className="leading-tight">{transcriptPreviews[recording.id]}</p>
-                            ) : (
-                              <div className="flex items-center justify-center py-0.5">
-                                <div className="animate-spin h-2 w-2 border border-emerald-500 rounded-full border-t-transparent"></div>
-                                <span className="ml-1">Loading transcript...</span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                    {sortedFilteredRecordings.map((recording) => renderRecordingItem(recording))}
                   </div>
                 ) : (
                   <div className="flex items-center justify-center h-full text-muted-foreground">
