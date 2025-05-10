@@ -7,20 +7,50 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
 import { Progress } from "@/components/ui/progress"
-import { FolderOpen, File, X, AlertCircle, FileAudio, Brain, Heart, ListTree } from "lucide-react"
+import { 
+  FolderOpen, 
+  FileIcon,
+  X, 
+  AlertCircle, 
+  FileAudio, 
+  Brain, 
+  Heart, 
+  ListTree 
+} from "lucide-react"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { useToast } from "@/hooks/use-toast"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { unifiedRecordingsService } from "@/lib/recordings-service"
+import { indexedDBService } from "@/lib/indexeddb/indexed-db-service"
 
 interface ImportFile {
   file: File
   id: string
   name: string
+  formattedName: string
   status: 'queued' | 'uploading' | 'processing' | 'completed' | 'failed'
   progress: number
   error?: string
   recordingId?: string
+  transcriptFile?: File | null
+  transcriptContent?: string | null
+}
+
+// Function to format the filename according to the pattern
+const formatFileName = (originalName: string): string => {
+  const now = new Date()
+  const year = now.getFullYear().toString().slice(-2)
+  const month = (now.getMonth() + 1).toString().padStart(2, '0')
+  const day = now.getDate().toString().padStart(2, '0')
+  const hours = now.getHours().toString().padStart(2, '0')
+  const minutes = now.getMinutes().toString().padStart(2, '0')
+  const seconds = now.getSeconds().toString().padStart(2, '0')
+  
+  // Create the datetime part
+  const dateTime = `${year}${month}${day}_${hours}${minutes}${seconds}`
+  
+  // Always use .mp3 extension
+  return `${dateTime}.mp3`
 }
 
 export default function ImportTab() {
@@ -49,6 +79,7 @@ export default function ImportTab() {
       file,
       id: crypto.randomUUID(),
       name: file.name,
+      formattedName: formatFileName(file.name),
       status: 'queued',
       progress: 0
     }))
@@ -64,13 +95,31 @@ export default function ImportTab() {
     setFiles(prev => prev.filter(f => f.id !== id))
   }
 
+  // Add transcript file to a queued audio file
+  const handleTranscriptSelect = (event: React.ChangeEvent<HTMLInputElement>, fileId: string) => {
+    const transcriptFile = event.target.files?.[0];
+    if (!transcriptFile) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const content = e.target?.result as string;
+      setFiles(prev => prev.map(f =>
+        f.id === fileId
+          ? { ...f, transcriptFile, transcriptContent: content }
+          : f
+      ));
+    };
+    reader.readAsText(transcriptFile);
+    // Reset input
+    event.target.value = '';
+  };
+
   // Process a single file
   const processFile = async (file: ImportFile): Promise<void> => {
     try {
       // Update status to uploading
-      setFiles(prev => prev.map(f => 
-        f.id === file.id 
-          ? { ...f, status: 'uploading', progress: 0 } 
+      setFiles(prev => prev.map(f =>
+        f.id === file.id
+          ? { ...f, status: 'uploading', progress: 0 }
           : f
       ))
 
@@ -82,22 +131,62 @@ export default function ImportTab() {
         throw new Error("You must be logged in to import recordings")
       }
 
+      // Convert the file to a blob and create a new file with the formatted name
+      const blob = await file.file.arrayBuffer().then(buffer => new Blob([buffer], { type: 'audio/mp3' }))
+      const renamedFile = new window.File([blob], file.formattedName, { type: 'audio/mp3' })
+
       // Upload the recording using unified service
-      const recording = await unifiedRecordingsService.createRecording(user.id, file.file, {
-        name: file.name,
-        description: `Imported recording: ${file.name}`,
+      const recording = await unifiedRecordingsService.createRecording(user.id, renamedFile, {
+        name: file.formattedName.replace(/\.[^/.]+$/, ''), // Remove extension for the display name
+        description: `Imported recording`, // Simple description
         durationSeconds: 0, // Will be updated after processing
         isPublic: false
       })
 
       // Update file status with recording ID
-      setFiles(prev => prev.map(f => 
-        f.id === file.id 
-          ? { ...f, recordingId: recording.id, progress: 30 } 
+      setFiles(prev => prev.map(f =>
+        f.id === file.id
+          ? { ...f, recordingId: recording.id, progress: 30 }
           : f
       ))
 
-      // Prepare transcription options
+      // If user provided a transcript, store it directly and skip AssemblyAI
+      if (file.transcriptContent) {
+        if (unifiedRecordingsService.isLocalStorage()) {
+          await indexedDBService.addTranscriptToRecording(
+            recording.id,
+            file.transcriptContent,
+            null // No summary
+          );
+        } else {
+          // For cloud, upload transcript to Supabase (assuming a 'transcripts' table)
+          const { error } = await supabase
+            .from('transcripts')
+            .insert({
+              recording_id: recording.id,
+              full_text: file.transcriptContent
+            });
+          if (error) throw new Error('Failed to upload transcript to cloud');
+          // Update is_processed in recordings table
+          const { error: updateError } = await supabase
+            .from('recordings')
+            .update({ is_processed: true })
+            .eq('id', recording.id);
+          if (updateError) throw new Error('Failed to update recording status in cloud');
+        }
+        setFiles(prev => prev.map(f =>
+          f.id === file.id
+            ? { ...f, status: 'completed', progress: 100 }
+            : f
+        ));
+        toast({
+          title: "File Imported with Transcript",
+          description: `${file.formattedName} and transcript have been imported.`
+        });
+        return;
+      }
+
+      // Prepare transcription options (if no transcript provided)
       const formData = new FormData()
       formData.append('recordingId', recording.id)
       formData.append('speakerLabels', enableSpeakerDetection.toString())
@@ -108,9 +197,9 @@ export default function ImportTab() {
       formData.append('file', file.file)
 
       // Update status to processing
-      setFiles(prev => prev.map(f => 
-        f.id === file.id 
-          ? { ...f, status: 'processing', progress: 50 } 
+      setFiles(prev => prev.map(f =>
+        f.id === file.id
+          ? { ...f, status: 'processing', progress: 50 }
           : f
       ))
 
@@ -127,23 +216,32 @@ export default function ImportTab() {
 
       const result = await response.json()
 
+      // If storage is local, update the local recording with transcript and summary
+      if (unifiedRecordingsService.isLocalStorage()) {
+        await indexedDBService.addTranscriptToRecording(
+          recording.id,
+          result.transcript,
+          result.summary
+        );
+      }
+
       // Update file status to completed
-      setFiles(prev => prev.map(f => 
-        f.id === file.id 
-          ? { ...f, status: 'completed', progress: 100 } 
+      setFiles(prev => prev.map(f =>
+        f.id === file.id
+          ? { ...f, status: 'completed', progress: 100 }
           : f
       ))
 
       toast({
         title: "File Processed Successfully",
-        description: `${file.name} has been processed with AssemblyAI.`
+        description: `${file.formattedName} has been processed with AssemblyAI.`
       })
 
     } catch (error) {
       console.error("Error processing file:", error)
       
-      setFiles(prev => prev.map(f => 
-        f.id === file.id 
+      setFiles(prev => prev.map(f =>
+        f.id === file.id
           ? { 
               ...f, 
               status: 'failed', 
@@ -211,7 +309,7 @@ export default function ImportTab() {
             onClick={() => fileInputRef.current?.click()}
             disabled={isProcessing}
           >
-            <File className="mr-2 h-4 w-4" />
+            <FileIcon className="mr-2 h-4 w-4" />
             Add Files
           </Button>
           <input
@@ -319,12 +417,38 @@ export default function ImportTab() {
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <FileAudio className="h-4 w-4 text-blue-500" />
-                      <span className="font-medium">{file.name}</span>
+                      <div className="flex flex-col">
+                        <span className="font-medium">{file.formattedName}</span>
+                        <span className="text-xs text-muted-foreground">
+                          Original: {file.name}
+                        </span>
+                        {file.transcriptFile && (
+                          <span className="text-xs text-green-700 mt-1">
+                            Transcript: {file.transcriptFile.name}
+                          </span>
+                        )}
+                      </div>
                       <span className="text-xs text-muted-foreground">
                         ({Math.round(file.file.size / 1024 / 1024 * 100) / 100} MB)
                       </span>
                     </div>
-                    
+                    {/* Transcript upload button */}
+                    {file.status === 'queued' && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <label className="text-xs text-blue-600 cursor-pointer underline">
+                          <input
+                            type="file"
+                            accept=".txt"
+                            className="hidden"
+                            onChange={e => handleTranscriptSelect(e, file.id)}
+                          />
+                          Add Transcript (.txt)
+                        </label>
+                        {file.transcriptFile && (
+                          <span className="text-xs text-green-700">Transcript added</span>
+                        )}
+                      </div>
+                    )}
                     {file.status !== 'queued' && (
                       <div className="mt-2">
                         <Progress value={file.progress} className="h-1" />
@@ -341,14 +465,12 @@ export default function ImportTab() {
                         </div>
                       </div>
                     )}
-                    
                     {file.error && (
                       <div className="mt-2 text-xs text-red-500">
                         Error: {file.error}
                       </div>
                     )}
                   </div>
-                  
                   <div className="flex items-center gap-2">
                     <Button
                       variant="ghost"

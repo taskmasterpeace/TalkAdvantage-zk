@@ -177,7 +177,7 @@ Key Points:
         console.error('Failed to copy text: ', err);
       });
   };
-
+  
   // Week number calculation
   const getWeekNumber = (date: Date): number => {
     const year = date.getFullYear();
@@ -819,17 +819,17 @@ Key Points:
             setSelectedHourInfo(null);
           }}
         >
-          <div className="flex items-center gap-0.5">
+            <div className="flex items-center gap-0.5">
             <span className={`text-[10px] font-medium 
               ${isToday ? "text-white bg-primary h-4 w-4 flex items-center justify-center rounded-full" : ""}
               ${isInDateRange ? "text-indigo-700 dark:text-indigo-300" : ""}
               ${(isRangeStart || isRangeEnd) ? "text-indigo-800 dark:text-indigo-200 font-semibold" : ""}
             `}>
-              {i}
-            </span>
-            {isToday && !isSelected && (
-              <span className="text-[7px] text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/40 px-0.5 rounded-sm">Today</span>
-            )}
+                {i}
+              </span>
+              {isToday && !isSelected && (
+                <span className="text-[7px] text-blue-600 dark:text-blue-400 bg-blue-100 dark:bg-blue-900/40 px-0.5 rounded-sm">Today</span>
+              )}
             {(isRangeStart || isRangeEnd) && (
               <span className="text-[7px] text-indigo-600 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-900/40 px-0.5 rounded-sm">
                 {isRangeStart ? 'Start' : 'End'}
@@ -862,7 +862,7 @@ Key Points:
               </div>
             </div>
           )}
-
+          
           {/* Tooltip-like hover effect */}
           <div className="absolute inset-0 bg-white/90 dark:bg-slate-900/90 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-center justify-center p-1 text-center">
             <div className="text-[10px] font-medium">
@@ -973,7 +973,7 @@ Key Points:
             // Get the first 150 characters as a preview
             const preview = localRecording.transcript.substring(0, 150) + 
               (localRecording.transcript.length > 150 ? "..." : "");
-            
+              
             setTranscriptPreviews(prev => ({
               ...prev,
               [recordingId]: preview
@@ -1544,8 +1544,20 @@ Key Points:
   return (
     <div className="space-y-4">
       {/* Recording Statistics */}
+      
       <div className="p-3 bg-gradient-to-br from-emerald-50/80 via-slate-50/90 to-teal-50/80 dark:from-emerald-900/20 dark:via-slate-900/40 dark:to-teal-900/20 rounded-lg border border-emerald-200/50 dark:border-emerald-800/30 shadow-sm">
         <div className="flex items-center justify-between gap-4">
+             {/* Storage & Refresh */}
+             <div className="flex items-center gap-3 ml-4">
+            <div className={`flex items-center gap-1.5 px-3 py-2 rounded-full border shadow-sm bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-800`}>
+              <RefreshCw className="h-5 w-5" onClick={fetchRecordings} />
+              <span className="text-xs font-medium">Storage:</span>
+              <span className="flex items-center gap-1 text-xs font-bold">
+                {storageLocation === "local" ? <Database className="h-4 w-4" /> : <Cloud className="h-4 w-4" />}
+                {storageLocation === "local" ? "Local" : "Cloud"}
+              </span>
+            </div>
+          </div>
           {/* White box for all stats */}
           <div className="flex-1 bg-white dark:bg-slate-900 rounded-xl px-6 py-3 shadow-sm border border-slate-100 dark:border-slate-800 flex items-center gap-4">
             {/* Stats Group 1: Totals */}
@@ -1630,17 +1642,7 @@ Key Points:
             </div>
           </div>
 
-          {/* Storage & Refresh */}
-          <div className="flex items-center gap-3 ml-4">
-            <div className={`flex items-center gap-1.5 px-3 py-2 rounded-full border shadow-sm bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border-blue-200 dark:border-blue-800`}>
-              <RefreshCw className="h-5 w-5" onClick={fetchRecordings} />
-              <span className="text-xs font-medium">Storage:</span>
-              <span className="flex items-center gap-1 text-xs font-bold">
-                {storageLocation === "local" ? <Database className="h-4 w-4" /> : <Cloud className="h-4 w-4" />}
-                {storageLocation === "local" ? "Local" : "Cloud"}
-              </span>
-            </div>
-          </div>
+       
         </div>
       </div>
 
