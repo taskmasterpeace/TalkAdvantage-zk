@@ -14,6 +14,7 @@ export interface Recording {
   updatedAt: string
   isProcessed: boolean
   isPublic: boolean
+  tags?: string // JSON string of Tag[] - [{id: string, name: string, color: string}]
 }
 
 export interface CreateRecordingParams {
@@ -21,6 +22,7 @@ export interface CreateRecordingParams {
   description?: string
   durationSeconds?: number
   isPublic?: boolean
+  tags?: string // JSON string of Tag[] - [{id: string, name: string, color: string}]
 }
 
 export const recordingsService = {
@@ -177,5 +179,6 @@ function mapRecordingFromDb(data: any): Recording {
     updatedAt: data.updated_at,
     isProcessed: data.is_processed,
     isPublic: data.is_public,
+    tags: data.tags
   }
 }

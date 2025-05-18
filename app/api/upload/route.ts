@@ -26,6 +26,7 @@ export async function POST(request: NextRequest) {
     const description = formData.get('description') as string | null
     const durationSeconds = parseInt(formData.get('durationSeconds') as string || '0')
     const isPublic = (formData.get('isPublic') as string) === 'true'
+    const tags = formData.get('tags') as string | null // Get tags from form data
 
     if (!file) {
       return NextResponse.json(
@@ -85,6 +86,7 @@ export async function POST(request: NextRequest) {
         storage_path: filePath,
         is_public: isPublic,
         is_processed: false,
+        tags: tags // Add tags to the database record
       })
       .select()
       .single()
@@ -109,6 +111,7 @@ export async function POST(request: NextRequest) {
       updatedAt: data.updated_at,
       isProcessed: data.is_processed,
       isPublic: data.is_public,
+      tags: data.tags // Include tags in the response
     }
     
     return NextResponse.json({ 

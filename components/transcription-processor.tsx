@@ -134,8 +134,9 @@ export default function TranscriptionProcessor({
       formData.append("sentimentAnalysis", enableSentimentAnalysis.toString())
       formData.append("topicDetection", enableTopicDetection.toString())
       formData.append("summarization", enableSummarization.toString())
-      formData.append("summaryType", summaryType)
+      // formData.append("summaryType", summaryType)
       formData.append("recordingId", recordingId)
+      formData.append("isLocal", isLocal.toString())
 
       // Call the transcribe API
       const response = await fetch("/api/transcribe", {
@@ -175,7 +176,7 @@ export default function TranscriptionProcessor({
               id: updatedRecording.id,
               isProcessed: updatedRecording.isProcessed,
               hasTranscript: !!updatedRecording.transcript,
-              transcriptLength: updatedRecording.transcript?.length || 0
+              transcriptLength: updatedRecording.transcript?.length || 0,
             });
           } else {
             console.error("Failed to update recording with transcript - no recording returned");
@@ -207,8 +208,8 @@ export default function TranscriptionProcessor({
             console.error("Error inserting segments:", segmentsError);
             // Continue even if segments insertion fails
           }
+          }
         }
-      }
 
       // Update UI for success (same for both local and cloud)
       setProgress(100)

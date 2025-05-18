@@ -1,12 +1,12 @@
 "use client"
 
-import { useState, useEffect, useMemo, useCallback } from "react"
+import { useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
-import { RefreshCw, ChevronLeft, ChevronRight, Search, FileAudio, Clock, Calendar, Download, FileText, MoreHorizontal, ArrowUpRight, CalendarCheck, Brain, Zap, Cloud, Database, ExternalLink, Settings, Moon, ArrowDownRight, FolderOpen, CalendarDays, Copy } from "lucide-react"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose } from "@/components/ui/dialog"
+import { RefreshCw, ChevronLeft, ChevronRight, Search, FileAudio, Clock, Calendar, Download, FileText, MoreHorizontal, ArrowUpRight, CalendarCheck, Brain, Zap, Cloud, Database, ExternalLink, Settings, Moon, ArrowDownRight, FolderOpen, CalendarDays, Copy, X, Tag as TagIcon, Wand2, Pencil, Trash2 } from "lucide-react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose, DialogFooter } from "@/components/ui/dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -107,20 +107,284 @@ const downloadTranscript = async (recordingId: string, recordingName: string) =>
 }
 
 interface Recording {
-  id: string
-  name: string
-  description: string | null
-  duration_seconds: number // maps to durationSeconds in the service
-  created_at: string      // maps to createdAt in the service
-  is_processed: boolean   // maps to isProcessed in the service
-  storage_path: string    // maps to storagePath in the service
-  user_id: string         // maps to userId in the service
+  id: string;
+  name: string;
+  description: string | null;
+  duration_seconds: number;
+  created_at: string;
+  is_processed: boolean;
+  storage_path: string;
+  user_id: string;
+  tags: string | null; // JSON string of Tag[] - [{name: string, color: string}]
+}
+
+interface CloudRecording {
+  id: string;
+  name: string;
+  description: string | null;
+  durationSeconds: number;
+  createdAt: string;
+  isProcessed: boolean;
+  storagePath: string;
+  userId: string;
+  tags: string | null; // JSON string of Tag[] - [{name: string, color: string}]
+}
+
+interface Tag {
+  id: string;
+  name: string;
+  color: string;
+}
+
+interface RecordingTag {
+  recordingId: string;
+  tags: Tag[];
+}
+
+// Define the shape of the IndexedDB recording
+interface IndexedDBRecording {
+  id: string;
+  userId: string;
+  name: string;
+  description?: string | null;
+  durationSeconds: number;
+  audioBlob: Blob;
+  createdAt: string;
+  isProcessed: boolean;
+  isPublic: boolean;
+  transcript?: string | null;
+  summary?: string | null;
+  tags: string | null; // JSON string of Tag[] - [{name: string, color: string}]
+  type?: string;
+  mimeType?: string;
+}
+
+// Helper function to convert IndexedDB recording to our Recording format
+const convertIndexedDBRecording = (dbRecording: IndexedDBRecording): Recording => {
+  console.log("Converting recording:", dbRecording);
+  return {
+    id: dbRecording.id,
+    name: dbRecording.name,
+    description: dbRecording.description || null,
+    duration_seconds: dbRecording.durationSeconds,
+    created_at: dbRecording.createdAt,
+    is_processed: dbRecording.isProcessed,
+    storage_path: dbRecording.id, // Use ID as storage path for local recordings
+    user_id: dbRecording.userId,
+    tags: dbRecording.tags || null // Ensure null if tags is undefined
+  };
+};
+
+// Available tag colors
+const TAG_COLORS = [
+  { name: 'Red', value: 'red', class: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800' },
+  { name: 'Blue', value: 'blue', class: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800' },
+  { name: 'Green', value: 'green', class: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800' },
+  { name: 'Yellow', value: 'yellow', class: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800' },
+  { name: 'Purple', value: 'purple', class: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 border-purple-200 dark:border-purple-800' },
+];
+
+// Constants from IndexedDB service
+const RECORDINGS_STORE = "recordings"
+const DB_NAME = "talkadvantage-local"
+const DB_VERSION = 1
+
+// Initialize IndexedDB
+async function initDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    console.log("Initializing IndexedDB...");
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+    request.onerror = (event) => {
+      console.error("Error opening IndexedDB:", event);
+      reject(new Error("Could not open IndexedDB database"));
+    };
+
+    request.onsuccess = (event) => {
+      console.log("IndexedDB opened successfully");
+      const db = (event.target as IDBOpenDBRequest).result;
+      resolve(db);
+    };
+
+    request.onupgradeneeded = (event) => {
+      console.log("Upgrading IndexedDB...");
+      const db = (event.target as IDBOpenDBRequest).result;
+      if (!db.objectStoreNames.contains(RECORDINGS_STORE)) {
+        console.log("Creating recordings store...");
+        const store = db.createObjectStore(RECORDINGS_STORE, { keyPath: "id" });
+        store.createIndex("userId", "userId", { unique: false });
+        store.createIndex("createdAt", "createdAt", { unique: false });
+        console.log("Recordings store created");
+      }
+    };
+  });
+}
+
+// Regular expression for the correct filename format: YYMMDD_HHMMSS or YYMMDD_HHMM_Description (without extension)
+const FILENAME_FORMAT_REGEX = /^\d{6}_\d{6}(?:_[^.]+)?$|^\d{6}_\d{4}_[a-zA-Z0-9-_ ]+$/;
+
+// Function to check if a filename follows the correct format
+const isValidFilenameFormat = (filename: string): boolean => {
+  // Remove extension before checking format
+  const nameWithoutExt = filename.replace(/\.[^/.]+$/, "");
+  return FILENAME_FORMAT_REGEX.test(nameWithoutExt);
 }
 
 interface PeakTimeResult {
   hour: number;
   count: number;
   daysCount?: number;
+}
+
+// Custom hook for managing tags
+function useTagManagement() {
+  const [recordingTags, setRecordingTags] = useState<Record<string, Tag[]>>({});
+  const storageLocation = useSettingsStore(state => state.storageLocation);
+
+  const tagsToJSON = (tags: Tag[]): string => {
+    return JSON.stringify(tags.map(tag => ({
+      id: tag.id,
+      name: tag.name,
+      color: tag.color
+    })));
+  };
+
+  const JSONToTags = (jsonString: string | null): Tag[] => {
+    if (!jsonString) return [];
+    try {
+      const parsed = JSON.parse(jsonString);
+      return parsed.map((tag: { id: string; name: string; color: string }) => ({
+        id: tag.id || crypto.randomUUID(),
+        name: tag.name,
+        color: tag.color
+      }));
+    } catch (error) {
+      console.error('Error parsing tags JSON:', error);
+      return [];
+    }
+  };
+
+  const saveTags = async (recordingId: string, tags: Tag[]) => {
+    try {
+      console.log("Saving tags for recording:", { recordingId, tags });
+      const tagsJSON = tagsToJSON(tags);
+
+      if (storageLocation === 'local') {
+        // Save tags in IndexedDB
+        const dbRecording = await indexedDBService.getRecording(recordingId);
+        if (!dbRecording) {
+          throw new Error(`Recording ${recordingId} not found in local storage`);
+        }
+
+        console.log("Found local recording:", dbRecording);
+        const updatedRecording = {
+          ...dbRecording,
+          tags: tagsJSON
+        };
+        
+        // Update the recording in IndexedDB
+        console.log("Updating recording with tags:", updatedRecording);
+        await indexedDBService.updateRecording(updatedRecording);
+        console.log("Tags saved locally:", { recordingId, tags });
+      } else {
+        // Save tags in Supabase recordings table
+        const supabase = getSupabaseClient();
+        const { error } = await supabase
+          .from('recordings')
+          .update({ 
+            tags: tagsJSON,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', recordingId);
+        
+        if (error) {
+          throw error;
+        }
+        console.log("Tags saved to cloud:", { recordingId, tags });
+      }
+
+      // Update local state
+      setRecordingTags(prev => {
+        const newTags = {
+          ...prev,
+          [recordingId]: tags
+        };
+        console.log("Updated tags in state:", newTags);
+        return newTags;
+      });
+    } catch (error) {
+      console.error("Error saving tags:", error);
+      throw error;
+    }
+  };
+
+  const loadTags = async () => {
+    try {
+      if (storageLocation === 'local') {
+        // Get current user
+        const supabase = getSupabaseClient();
+        const { data: { user } } = await supabase.auth.getUser();
+        
+        if (!user) {
+          console.error("User not authenticated");
+          return;
+        }
+        
+        // Load tags from IndexedDB
+        const dbRecordings = await indexedDBService.getRecordings(user.id);
+        console.log("Loading tags from local recordings:", dbRecordings);
+        
+        const tags: Record<string, Tag[]> = {};
+        dbRecordings.forEach(recording => {
+          if (recording.tags) {
+            try {
+              const parsedTags = JSONToTags(recording.tags);
+              if (parsedTags.length > 0) {
+                tags[recording.id] = parsedTags;
+              }
+              console.log(`Loaded ${parsedTags.length} tags for recording ${recording.id}`);
+            } catch (error) {
+              console.error(`Error parsing tags for recording ${recording.id}:`, error);
+            }
+          }
+        });
+        
+        console.log("Setting tags in state:", tags);
+        setRecordingTags(tags);
+      } else {
+        // Load tags from Supabase recordings table
+        const supabase = getSupabaseClient();
+        const { data, error } = await supabase
+          .from('recordings')
+          .select('id, tags');
+        
+        if (error) {
+          throw error;
+        }
+
+        const tags: Record<string, Tag[]> = {};
+        data?.forEach(recording => {
+          if (recording.tags) {
+            tags[recording.id] = JSONToTags(recording.tags);
+          }
+        });
+        setRecordingTags(tags);
+      }
+    } catch (error) {
+      console.error("Error loading tags:", error);
+    }
+  };
+
+  // Load tags when storage location changes
+  useEffect(() => {
+    loadTags();
+  }, [storageLocation]);
+
+  return {
+    recordingTags,
+    saveTags,
+    loadTags
+  };
 }
 
 export default function LibraryTab() {
@@ -131,14 +395,14 @@ export default function LibraryTab() {
   const [selectedRecording, setSelectedRecording] = useState<Recording | null>(null)
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
-  const debouncedSearchQuery = useDebounce(searchQuery, 300);
+  const [isSearchingTranscripts, setIsSearchingTranscripts] = useState(false)
+  const [transcriptSearchCache, setTranscriptSearchCache] = useState<Record<string, string>>({})
   const [showTranscriptDialog, setShowTranscriptDialog] = useState(false)
   const [currentTranscript, setCurrentTranscript] = useState<string | null>(null)
   const [isLoadingTranscript, setIsLoadingTranscript] = useState(false)
   const [currentTranscriptTitle, setCurrentTranscriptTitle] = useState("")
   const [transcriptPreviews, setTranscriptPreviews] = useState<Record<string, string>>({})
   const [expandedRecordings, setExpandedRecordings] = useState<Record<string, boolean>>({})
-  const storageLocation = useSettingsStore(state => state.storageLocation)
   const [sortBy, setSortBy] = useState<"name" | "date">("date")
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc")
   const [viewMode, setViewMode] = useState<"calendar" | "heatmap">("calendar")
@@ -151,9 +415,37 @@ export default function LibraryTab() {
   const [dateRange, setDateRange] = useState<DateRange | undefined>(undefined)
   const [expandedAnalysis, setExpandedAnalysis] = useState<Record<string, boolean>>({})
   const [hasDeepAnalysis, setHasDeepAnalysis] = useState<Record<string, boolean>>({})
-  // Add new state for search type
-  const [searchType, setSearchType] = useState<"filename" | "transcript" | "tags" | "interaction">("filename");
-  const [transcriptSearchResults, setTranscriptSearchResults] = useState<Record<string, boolean>>({});
+  const [searchType, setSearchType] = useState<"filename" | "transcript" | "tags" | "interaction">("filename")
+  const [transcriptSearchResults, setTranscriptSearchResults] = useState<Record<string, boolean>>({})
+  const [activeTagFilters, setActiveTagFilters] = useState<Tag[]>([])
+  // Add new state for selected recordings
+  const [selectedRecordings, setSelectedRecordings] = useState<Set<string>>(new Set())
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  // Add rename state
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [recordingToRename, setRecordingToRename] = useState<Recording | null>(null);
+
+  // Use the tag management hook
+  const { recordingTags, saveTags, loadTags } = useTagManagement();
+
+  // Get storage location from settings store
+  const storageLocation = useSettingsStore(state => state.storageLocation)
+
+  // Increase debounce time for better performance
+  const debouncedSearchQuery = useDebounce(searchQuery, 500);
+
+  // Memoize the basic search function to improve performance
+  const performBasicSearch = useCallback((recording: Recording, query: string): boolean => {
+    if (!query.trim()) return true;
+    const searchTerm = query.toLowerCase();
+    
+    // Cache the formatted name to avoid recalculating
+    const formattedName = formatRecordingName(recording).toLowerCase();
+    const description = (recording.description || '').toLowerCase();
+    
+    return formattedName.includes(searchTerm) || description.includes(searchTerm);
+  }, []);
 
   // Add the copyAnalysisSummary function here, inside the component
   const copyAnalysisSummary = (recording: Recording) => {
@@ -259,42 +551,77 @@ Key Points:
   // Create a fetchRecordings function
   const fetchRecordings = async () => {
     try {
-      setLoading(true)
-      const supabase = getSupabaseClient()
+      setLoading(true);
+      const supabase = getSupabaseClient();
       
       // Get current user
       const {
         data: { user },
-      } = await supabase.auth.getUser()
+      } = await supabase.auth.getUser();
 
       if (!user) {
-        console.error("User not authenticated")
-        setLoading(false)
-        return
+        console.error("User not authenticated");
+        setLoading(false);
+        return;
       }
 
-      // Use the unified recordings service instead of directly querying Supabase
-      const data = await unifiedRecordingsService.getRecordings(user.id)
+      let mappedData: Recording[];
       
-      // Map the returned data to match our local interface
-      const mappedData = data.map(rec => ({
-        id: rec.id,
-        name: rec.name,
-        description: rec.description || null,
-        duration_seconds: rec.durationSeconds,
-        created_at: rec.createdAt,
-        is_processed: rec.isProcessed,
-        storage_path: rec.storagePath,
-        user_id: rec.userId
-      }));
+      if (storageLocation === 'local') {
+        // Get recordings from IndexedDB
+        console.log("Fetching local recordings for user:", user.id);
+        try {
+          const dbRecordings = await indexedDBService.getRecordings(user.id);
+          console.log("Raw local recordings:", dbRecordings);
+          
+          // Explicitly map the recordings with type safety
+          mappedData = dbRecordings.map(dbRecording => ({
+            id: dbRecording.id,
+            name: dbRecording.name,
+            description: dbRecording.description || null,
+            duration_seconds: dbRecording.durationSeconds,
+            created_at: dbRecording.createdAt,
+            is_processed: dbRecording.isProcessed,
+            storage_path: dbRecording.id, // Use ID as storage path for local recordings
+            user_id: dbRecording.userId,
+            tags: dbRecording.tags || null // Ensure null if tags is undefined
+          }));
+          
+          console.log("Mapped local recordings:", mappedData);
+        } catch (error) {
+          console.error("Error fetching local recordings:", error);
+          mappedData = [];
+        }
+      } else {
+        // Get recordings from cloud
+        const cloudData = await unifiedRecordingsService.getRecordings(user.id);
+        // Cast the raw data to CloudRecording type
+        const data = cloudData as unknown as CloudRecording[];
+        mappedData = data.map(rec => ({
+          id: rec.id,
+          name: rec.name,
+          description: rec.description,
+          duration_seconds: rec.durationSeconds,
+          created_at: rec.createdAt,
+          is_processed: rec.isProcessed,
+          storage_path: rec.storagePath,
+          user_id: rec.userId,
+          tags: rec.tags
+        }));
+      }
       
-      setRecordings(mappedData)
+      console.log("Final recordings to set:", mappedData);
+      setRecordings(mappedData);
+
+      // Load tags after fetching recordings
+      await loadTags();
     } catch (error) {
-      console.error("Error fetching recordings:", error)
+      console.error("Error fetching recordings:", error);
+      setRecordings([]); // Set empty array on error
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }
+  };
 
   // Hook up the fetchRecordings function to an effect that runs on mount and when storage location changes
   useEffect(() => {
@@ -339,9 +666,27 @@ Key Points:
     })
   }
 
-  // Get recordings for the selected week
-  const getRecordingsForWeek = (weekNumber: number) => {
-    if (!recordings.length || weekNumber === 0) return [];
+  // Memoize date range check
+  const isDateInRange = useCallback((date: Date) => {
+    if (!dateRange?.from || !dateRange?.to) return true;
+    return isWithinInterval(date, {
+      start: startOfDay(dateRange.from),
+      end: endOfDay(dateRange.to)
+    });
+  }, [dateRange]);
+
+  // Memoize duration check
+  const isDurationInRange = useCallback((duration: number) => {
+    if (!durationRange.min && !durationRange.max) return true;
+    const durationInUnit = getDurationInUnit(duration, durationUnit);
+    const min = durationRange.min ? parseFloat(durationRange.min) : 0;
+    const max = durationRange.max ? parseFloat(durationRange.max) : Infinity;
+    return durationInUnit >= min && durationInUnit <= max;
+  }, [durationRange, durationUnit]);
+
+  // Memoize getRecordingsForWeek result
+  const currentWeekRecordings = useMemo(() => {
+    if (!recordings.length || currentWeek === 0) return [];
     
     // Calculate the date range for the selected week
     const currentDate = new Date();
@@ -357,24 +702,118 @@ Key Points:
     
     // Get the start date for the week
     const startOfWeek = new Date(firstSundayOfYear);
-    startOfWeek.setDate(firstSundayOfYear.getDate() + (weekNumber - 1) * 7);
+    startOfWeek.setDate(firstSundayOfYear.getDate() + (currentWeek - 1) * 7);
     startOfWeek.setHours(0, 0, 0, 0);
     
     const endOfWeek = new Date(startOfWeek);
     endOfWeek.setDate(startOfWeek.getDate() + 6);
     endOfWeek.setHours(23, 59, 59, 999);
     
-    console.log("Fetching recordings for week:", { 
-      weekNumber, 
-      startOfWeek, 
-      endOfWeek 
-    });
-    
     return recordings.filter((recording) => {
       const recordingDate = new Date(recording.created_at);
       return recordingDate >= startOfWeek && recordingDate <= endOfWeek;
     });
-  };
+  }, [recordings, currentWeek]);
+
+  // Update the filteredRecordings useMemo to include selectedRecordings
+  const filteredRecordings = useMemo(() => {
+    return recordings.filter(recording => {
+      // Check date range first (most efficient)
+      if (!isDateInRange(new Date(recording.created_at))) return false;
+
+      // Check duration next
+      if (!isDurationInRange(recording.duration_seconds)) return false;
+
+      // Check active tag filters
+      if (activeTagFilters.length > 0) {
+        const recordingTagList = recordingTags[recording.id] || [];
+        // Recording must match ALL selected tag filters
+        const hasAllSelectedTags = activeTagFilters.every(filterTag => 
+          recordingTagList.some(tag => 
+            tag.name === filterTag.name && tag.color === filterTag.color
+          )
+        );
+        if (!hasAllSelectedTags) return false;
+      }
+
+      // Finally check search
+      if (searchType === "transcript") {
+        return debouncedSearchQuery.trim() === "" || Boolean(transcriptSearchResults[recording.id]);
+      } else if (searchType === "tags") {
+        if (!debouncedSearchQuery.trim()) return true;
+        const recordingTagList = recordingTags[recording.id] || [];
+        return recordingTagList.some(tag => 
+          tag.name.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
+        );
+      }
+      return performBasicSearch(recording, debouncedSearchQuery);
+    });
+  }, [
+    recordings,
+    isDateInRange,
+    isDurationInRange,
+    searchType,
+    debouncedSearchQuery,
+    transcriptSearchResults,
+    recordingTags,
+    performBasicSearch,
+    activeTagFilters,
+    selectedRecordings // Add this dependency
+  ]);
+
+  // Update filteredDateRecordings similarly
+  const filteredDateRecordings = useMemo(() => {
+    const baseRecordings = selectedHourRecordings.length > 0
+      ? selectedHourRecordings
+      : isWeekView && viewMode === "heatmap"
+        ? currentWeekRecordings
+        : selectedDate
+          ? getRecordingsForDate(selectedDate)
+          : [];
+
+    return baseRecordings.filter(recording => {
+      // Check duration first
+      if (!isDurationInRange(recording.duration_seconds)) return false;
+
+      // Check active tag filters
+      if (activeTagFilters.length > 0) {
+        const recordingTagList = recordingTags[recording.id] || [];
+        // Recording must match ALL selected tag filters
+        const hasAllSelectedTags = activeTagFilters.every(filterTag => 
+          recordingTagList.some(tag => 
+            tag.name === filterTag.name && tag.color === filterTag.color
+          )
+        );
+        if (!hasAllSelectedTags) return false;
+      }
+
+      // Then check search
+      if (searchType === "transcript") {
+        return debouncedSearchQuery.trim() === "" || Boolean(transcriptSearchResults[recording.id]);
+      } else if (searchType === "tags") {
+        if (!debouncedSearchQuery.trim()) return true;
+        const recordingTagList = recordingTags[recording.id] || [];
+        return recordingTagList.some(tag => 
+          tag.name.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
+        );
+      }
+      return performBasicSearch(recording, debouncedSearchQuery);
+    });
+  }, [
+    selectedHourRecordings,
+    isWeekView,
+    viewMode,
+    currentWeekRecordings,
+    selectedDate,
+    isDurationInRange,
+    searchType,
+    debouncedSearchQuery,
+    transcriptSearchResults,
+    recordingTags,
+    performBasicSearch,
+    activeTagFilters,
+    getRecordingsForDate
+  ]);
 
   // Get recordings count by date for the current month
   const getRecordingsCountByDate = () => {
@@ -471,7 +910,15 @@ Key Points:
   }
 
   const formatRecordingName = (recording: Recording): string => {
-    // Extract date and time from the created_at field
+    // Remove any existing extension first
+    let nameWithoutExt = recording.name.replace(/\.[^/.]+$/, "");
+    
+    // If the name already follows our convention, just add .mp3
+    if (isValidFilenameFormat(nameWithoutExt)) {
+      return `${nameWithoutExt}.mp3`;
+    }
+    
+    // Otherwise, format according to convention
     const date = new Date(recording.created_at);
     
     // Format as YYMMDD_HHMMSS
@@ -542,168 +989,139 @@ Key Points:
     });
   }
 
-  // Memoize the basic search function
-  const performBasicSearch = useCallback((recording: Recording, query: string): boolean => {
-    const searchTerm = query.toLowerCase();
-    return (
-      recording.name.toLowerCase().includes(searchTerm) ||
-      formatRecordingName(recording).toLowerCase().includes(searchTerm) ||
-      (recording.description?.toLowerCase().includes(searchTerm) ?? false)
-    );
-  }, []);
-
-  // Memoize transcript search function
+  // Optimize transcript search to use cache and avoid repeated API calls
   const searchInTranscripts = useCallback(async (query: string) => {
     if (!query.trim()) {
       setTranscriptSearchResults({});
       return;
     }
 
+    setIsSearchingTranscripts(true);
     const results: Record<string, boolean> = {};
     
-    // Search in loaded transcript previews first for immediate results
-    Object.entries(transcriptPreviews).forEach(([recordingId, transcript]) => {
-      if (transcript.toLowerCase().includes(query.toLowerCase())) {
+    try {
+      // Search in loaded transcript previews first
+      Object.entries(transcriptPreviews).forEach(([recordingId, transcript]) => {
+        if (transcript.toLowerCase().includes(query.toLowerCase())) {
+          results[recordingId] = true;
+        }
+      });
+
+      // Update results immediately with what we have
+      setTranscriptSearchResults(results);
+
+      // Get unloaded recordings that aren't in cache
+      const unloadedRecordings = recordings.filter(
+        rec => rec.is_processed && 
+        !transcriptPreviews[rec.id] && 
+        !transcriptSearchCache[rec.id]
+      );
+
+      // Process in batches to avoid overwhelming the API
+      const batchSize = 5;
+      for (let i = 0; i < unloadedRecordings.length; i += batchSize) {
+        const batch = unloadedRecordings.slice(i, i + batchSize);
+        await Promise.all(batch.map(async (recording) => {
+          try {
+            if (storageLocation === "local") {
+              const localRecording = await indexedDBService.getRecording(recording.id);
+              const transcript = localRecording?.transcript || "";
+              
+              // Update cache and check search
+              setTranscriptSearchCache(prev => ({
+                ...prev,
+                [recording.id]: transcript
+              }));
+              
+              if (transcript.toLowerCase().includes(query.toLowerCase())) {
+                results[recording.id] = true;
+              }
+              
+              // Update preview
+              setTranscriptPreviews(prev => ({
+                ...prev,
+                [recording.id]: transcript
+              }));
+            } else {
+              // For cloud recordings
+              const supabase = getSupabaseClient();
+              const { data, error } = await supabase
+                .from("transcripts")
+                .select("full_text")
+                .eq("recording_id", recording.id)
+                .single();
+
+              const transcript = (!error && data?.full_text) ? data.full_text : "";
+              
+              // Update cache and check search
+              setTranscriptSearchCache(prev => ({
+                ...prev,
+                [recording.id]: transcript
+              }));
+              
+              if (transcript.toLowerCase().includes(query.toLowerCase())) {
+                results[recording.id] = true;
+              }
+              
+              // Update preview
+              setTranscriptPreviews(prev => ({
+                ...prev,
+                [recording.id]: transcript
+              }));
+            }
+          } catch (error) {
+            console.error("Error searching transcript:", error);
+            // Set empty string for failed fetches to avoid retrying
+            setTranscriptSearchCache(prev => ({
+              ...prev,
+              [recording.id]: ""
+            }));
+          }
+        }));
+        
+        // Update results after each batch
+        setTranscriptSearchResults({...results});
+      }
+    } finally {
+      setIsSearchingTranscripts(false);
+    }
+  }, [recordings, transcriptPreviews, transcriptSearchCache, storageLocation]);
+
+  // Add tag search functionality
+  const searchInTags = useCallback((query: string) => {
+    if (searchType !== "tags" || !query.trim()) return;
+
+    const results: Record<string, boolean> = {};
+    Object.entries(recordingTags).forEach(([recordingId, tags]) => {
+      if (tags.some(tag => tag.name.toLowerCase().includes(query.toLowerCase()))) {
         results[recordingId] = true;
       }
     });
-
-    // Update results immediately with what we have
     setTranscriptSearchResults(results);
+  }, [searchType, recordingTags]);
 
-    // Then search unloaded transcripts
-    const unloadedRecordings = recordings.filter(
-      rec => rec.is_processed && !transcriptPreviews[rec.id]
-    );
-
-    for (const recording of unloadedRecordings) {
-      try {
-        if (storageLocation === "local") {
-          const localRecording = await indexedDBService.getRecording(recording.id);
-          if (localRecording?.transcript) {
-            if (localRecording.transcript.toLowerCase().includes(query.toLowerCase())) {
-              results[recording.id] = true;
-            }
-            // Update transcript previews
-            setTranscriptPreviews(prev => ({
-              ...prev,
-              [recording.id]: localRecording.transcript 
-                ? localRecording.transcript.substring(0, 150) + 
-                  (localRecording.transcript.length > 150 ? "..." : "")
-                : "No transcript available"
-            }));
-          }
-        } else {
-          const supabase = getSupabaseClient();
-          const { data, error } = await supabase
-            .from("transcripts")
-            .select("full_text")
-            .eq("recording_id", recording.id)
-            .single();
-          
-          if (!error && data?.full_text) {
-            if (data.full_text.toLowerCase().includes(query.toLowerCase())) {
-              results[recording.id] = true;
-            }
-            // Update transcript previews
-            setTranscriptPreviews(prev => ({
-              ...prev,
-              [recording.id]: data.full_text.substring(0, 150) + 
-                (data.full_text.length > 150 ? "..." : "")
-            }));
-          }
-        }
-      } catch (error) {
-        console.error("Error searching transcript:", error);
-      }
-    }
-
-    // Update results again with any new findings
-    setTranscriptSearchResults(results);
-  }, [recordings, transcriptPreviews, storageLocation]);
-
-  // Update search effect to use debounced value
+  // Update search effect to include tag search
   useEffect(() => {
     if (searchType === "transcript") {
       searchInTranscripts(debouncedSearchQuery);
+    } else if (searchType === "tags") {
+      searchInTags(debouncedSearchQuery);
     }
-  }, [debouncedSearchQuery, searchType, searchInTranscripts]);
+  }, [debouncedSearchQuery, searchType, searchInTranscripts, searchInTags]);
 
-  // Memoize date range check
-  const isDateInRange = useCallback((date: Date) => {
-    if (!dateRange?.from || !dateRange?.to) return true;
-    return isWithinInterval(date, {
-      start: startOfDay(dateRange.from),
-      end: endOfDay(dateRange.to)
+  // Add function to get all unique tags
+  const getAllUniqueTags = useMemo(() => {
+    const uniqueTags = new Map<string, Tag>();
+    Object.values(recordingTags).forEach(tags => {
+      tags.forEach(tag => {
+        const key = `${tag.name}-${tag.color}`;
+        if (!uniqueTags.has(key)) {
+          uniqueTags.set(key, tag);
+        }
+      });
     });
-  }, [dateRange]);
-
-  // Memoize duration check
-  const isDurationInRange = useCallback((duration: number) => {
-    if (!durationRange.min && !durationRange.max) return true;
-    const durationInUnit = getDurationInUnit(duration, durationUnit);
-    const min = durationRange.min ? parseFloat(durationRange.min) : 0;
-    const max = durationRange.max ? parseFloat(durationRange.max) : Infinity;
-    return durationInUnit >= min && durationInUnit <= max;
-  }, [durationRange, durationUnit]);
-
-  // Optimize filtered recordings with memoization
-  const filteredRecordings = useMemo(() => {
-    return recordings.filter(recording => {
-      // Check date range first (most efficient)
-      if (!isDateInRange(new Date(recording.created_at))) return false;
-
-      // Check duration next
-      if (!isDurationInRange(recording.duration_seconds)) return false;
-
-      // Finally check search (most expensive)
-      if (searchType === "transcript") {
-        return debouncedSearchQuery.trim() === "" || Boolean(transcriptSearchResults[recording.id]);
-      }
-      return performBasicSearch(recording, debouncedSearchQuery);
-    });
-  }, [
-    recordings,
-    isDateInRange,
-    isDurationInRange,
-    searchType,
-    debouncedSearchQuery,
-    transcriptSearchResults,
-    performBasicSearch
-  ]);
-
-  // Optimize date filtered recordings
-  const filteredDateRecordings = useMemo(() => {
-    const baseRecordings = selectedHourRecordings.length > 0
-      ? selectedHourRecordings
-      : isWeekView && viewMode === "heatmap"
-        ? getRecordingsForWeek(currentWeek)
-        : selectedDate
-          ? getRecordingsForDate(selectedDate)
-          : [];
-
-    return baseRecordings.filter(recording => {
-      // Check duration first
-      if (!isDurationInRange(recording.duration_seconds)) return false;
-
-      // Then check search
-      if (searchType === "transcript") {
-        return debouncedSearchQuery.trim() === "" || Boolean(transcriptSearchResults[recording.id]);
-      }
-      return performBasicSearch(recording, debouncedSearchQuery);
-    });
-  }, [
-    selectedHourRecordings,
-    isWeekView,
-    viewMode,
-    currentWeek,
-    selectedDate,
-    isDurationInRange,
-    searchType,
-    debouncedSearchQuery,
-    transcriptSearchResults,
-    performBasicSearch
-  ]);
+    return Array.from(uniqueTags.values());
+  }, [recordingTags]);
 
   // Apply sorting to recordings
   const sortedFilteredRecordings = [...filteredRecordings].sort((a, b) => {
@@ -950,12 +1368,8 @@ Key Points:
   // Add a function to fetch transcript preview
   const fetchTranscriptPreview = async (recordingId: string) => {
     try {
-      // Check if we already have the preview
-      if (transcriptPreviews[recordingId]) {
-        return;
-      }
+      if (transcriptPreviews[recordingId]) return;
       
-      // Check if we should use local storage (from cookies)
       const cookieValue = document.cookie
         .split('; ')
         .find(row => row.startsWith('storageLocation='))
@@ -964,40 +1378,21 @@ Key Points:
       const storageLocation = cookieValue || 'cloud';
       
       if (storageLocation === 'local') {
-        console.log("Fetching local recording transcript preview", { recordingId });
         try {
           const localRecording = await indexedDBService.getRecording(recordingId);
-          
-          if (localRecording && typeof localRecording.transcript === 'string') {
-            console.log("Found local transcript for preview");
-            // Get the first 150 characters as a preview
-            const preview = localRecording.transcript.substring(0, 150) + 
-              (localRecording.transcript.length > 150 ? "..." : "");
-              
-            setTranscriptPreviews(prev => ({
-              ...prev,
-              [recordingId]: preview
-            }));
-          } else {
-            console.log("No local transcript found for preview");
-            setTranscriptPreviews(prev => ({
-              ...prev,
-              [recordingId]: "No transcript available."
-            }));
-          }
-        } catch (localError) {
-          console.error("Error accessing IndexedDB for preview:", localError);
+          setTranscriptPreviews(prev => ({
+            ...prev,
+            [recordingId]: localRecording?.transcript || "No transcript available."
+          }));
+        } catch (error) {
+          console.error("Error accessing IndexedDB for preview:", error);
           setTranscriptPreviews(prev => ({
             ...prev,
             [recordingId]: "Error loading transcript."
           }));
         }
       } else {
-        // For cloud recordings, fetch from Supabase as before
-        console.log("Fetching cloud recording transcript preview", { recordingId });
         const supabase = getSupabaseClient();
-        
-        // Get transcript
         const { data, error } = await supabase
           .from("transcripts")
           .select("full_text")
@@ -1013,12 +1408,9 @@ Key Points:
           return;
         }
         
-        // Get the first 150 characters as a preview
-        const previewText = data.full_text.substring(0, 150) + (data.full_text.length > 150 ? "..." : "");
-        
         setTranscriptPreviews(prev => ({
           ...prev,
-          [recordingId]: previewText
+          [recordingId]: data.full_text || "No transcript available."
         }));
       }
     } catch (error) {
@@ -1052,16 +1444,14 @@ Key Points:
 
   // Recording options modal component
   const RecordingOptionsModal = ({ recording }: { recording: Recording }) => {
-    // We'll use DialogClose to wrap our buttons
-    
     const handleDeepAnalysis = () => {
       alert("Deep Analysis feature coming soon");
     };
-
+  
     const handleLiveAnalysis = () => {
       alert("Live Analysis feature coming soon");
     };
-
+  
     const handleGoToDate = () => {
       const recordingDate = new Date(recording.created_at);
       setCurrentMonth(new Date(recordingDate.getFullYear(), recordingDate.getMonth(), 1));
@@ -1075,7 +1465,12 @@ Key Points:
     const handleDownloadTranscript = () => {
       downloadTranscript(recording.id, recording.name);
     };
-
+  
+    const handleRenameClick = () => {
+      setRecordingToRename(recording);
+      setShowRenameDialog(true);
+    };
+  
     return (
       <DialogContent className="sm:max-w-md">
         <DialogHeader className="border-b border-emerald-100 dark:border-emerald-900 pb-4">
@@ -1088,95 +1483,76 @@ Key Points:
           </p>
         </DialogHeader>
         <div className="py-3">
-          <div className="flex gap-2 mb-4 bg-emerald-50 dark:bg-emerald-950/30 p-3 rounded-md">
-            <div className="h-10 w-10 rounded-full bg-emerald-100 dark:bg-emerald-900 flex items-center justify-center">
-              <Clock className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-            </div>
-            <div>
-              <div className="text-sm font-medium">
-                {recording.duration_seconds > 0 ? formatDuration(recording.duration_seconds) : "Processing..."}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {formatDistanceToNow(new Date(recording.created_at), { addSuffix: true })}
-              </div>
-            </div>
-            <div className="ml-auto">
-              <span className={`px-2 py-1 rounded-full text-xs font-medium ${recording.is_processed ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-400' : 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/50 dark:text-yellow-400'}`}>
-                {recording.is_processed ? 'Processed' : 'Unprocessed'}
-              </span>
-            </div>
+          {/* Add Rename button */}
+          <div className="flex gap-2 mb-4">
+            <DialogClose asChild>
+              <Button 
+                variant="outline" 
+                className="flex items-center justify-start flex-1 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:hover:bg-blue-900/30 border-blue-200 dark:border-blue-900"
+                onClick={handleRenameClick}
+              >
+                <FileAudio className="mr-2 h-4 w-4 text-blue-600 dark:text-blue-400" />
+                <span className="font-medium">Rename</span>
+              </Button>
+            </DialogClose>
           </div>
           
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <h4 className="text-sm font-medium text-muted-foreground">Transcript Actions</h4>
-              <div className="grid grid-cols-2 gap-3">
-                <DialogClose asChild>
-                  <Button 
-                    variant="outline" 
-                    className="flex items-center justify-start bg-green-50 hover:bg-green-100 dark:bg-green-900/20 dark:hover:bg-green-900/30 border-green-200 dark:border-green-900"
-                    onClick={handleViewTranscript}
-                    disabled={!recording.is_processed}
-                  >
-                    <FileText className="mr-2 h-4 w-4 text-green-600 dark:text-green-400" />
-                    <span className="font-medium">View Transcript</span>
-                  </Button>
-                </DialogClose>
-                
-                <DialogClose asChild>
-                  <Button 
-                    variant="outline" 
-                    className="flex items-center justify-start bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:hover:bg-blue-900/30 border-blue-200 dark:border-blue-900"
-                    onClick={handleDownloadTranscript}
-                    disabled={!recording.is_processed}
-                  >
-                    <Download className="mr-2 h-4 w-4 text-blue-600 dark:text-blue-400" />
-                    <span className="font-medium">Download</span>
-                  </Button>
-                </DialogClose>
-              </div>
+          {/* Rest of the options */}
+          <div className="flex gap-2 mb-4 bg-emerald-50 dark:bg-emerald-950/30 p-3 rounded-md">
+            <div className="h-10 w-10 rounded-full bg-emerald-100 dark:bg-emerald-900 flex items-center justify-center">
+              <Wand2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
             </div>
-            
-            <div className="space-y-2">
-              <h4 className="text-sm font-medium text-muted-foreground">Analysis Options</h4>
-              <div className="grid grid-cols-2 gap-3">
-                <DialogClose asChild>
-                  <Button 
-                    variant="outline" 
-                    className="flex items-center justify-start bg-purple-50 hover:bg-purple-100 dark:bg-purple-900/20 dark:hover:bg-purple-900/30 border-purple-200 dark:border-purple-900"
-                    onClick={handleDeepAnalysis}
-                  >
-                    <Brain className="mr-2 h-4 w-4 text-purple-600 dark:text-purple-400" />
-                    <span className="font-medium">Deep Analysis</span>
-                  </Button>
-                </DialogClose>
-                
-                <DialogClose asChild>
-                  <Button 
-                    variant="outline" 
-                    className="flex items-center justify-start bg-amber-50 hover:bg-amber-100 dark:bg-amber-900/20 dark:hover:bg-amber-900/30 border-amber-200 dark:border-amber-900"
-                    onClick={handleLiveAnalysis}
-                  >
-                    <Zap className="mr-2 h-4 w-4 text-amber-600 dark:text-amber-400" />
-                    <span className="font-medium">Live Analysis</span>
-                  </Button>
-                </DialogClose>
-              </div>
-            </div>
-            
-            <div className="pt-2">
-              <DialogClose asChild>
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  onClick={handleGoToDate}
-                  className="flex items-center justify-center w-full bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-900/20 dark:hover:bg-indigo-900/30 border-indigo-200 dark:border-indigo-900"
+            <div className="flex-1">
+              <h3 className="font-medium">Analysis Options</h3>
+              <div className="mt-2 space-y-2">
+                <Button
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={handleDeepAnalysis}
                 >
-                  <CalendarCheck className="mr-2 h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-                  <span className="font-medium">Go to Date on Calendar</span>
+                  <Brain className="mr-2 h-4 w-4" />
+                  Deep Analysis
                 </Button>
-              </DialogClose>
+                <Button
+                  variant="outline"
+                  className="w-full justify-start"
+                  onClick={handleLiveAnalysis}
+                >
+                  <Zap className="mr-2 h-4 w-4" />
+                  Live Analysis
+                </Button>
+              </div>
             </div>
+          </div>
+  
+          <div className="flex gap-2 mb-4">
+            <Button
+              variant="outline"
+              className="flex-1 justify-start"
+              onClick={handleGoToDate}
+            >
+              <Calendar className="mr-2 h-4 w-4" />
+              Go to Date
+            </Button>
+          </div>
+  
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              className="flex-1 justify-start"
+              onClick={handleViewTranscript}
+            >
+              <FileText className="mr-2 h-4 w-4" />
+              View Transcript
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1 justify-start"
+              onClick={handleDownloadTranscript}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Download Transcript
+            </Button>
           </div>
         </div>
       </DialogContent>
@@ -1350,24 +1726,144 @@ Key Points:
     });
   };
 
-  // Modify the recording item rendering to include Deep Analysis panel
-  const renderRecordingItem = (recording: Recording, isDateView: boolean = false) => (
+  // Add delete handlers
+  const handleDelete = async (recordingIds: string[]) => {
+    try {
+      setIsDeleting(true);
+      
+      // Delete each recording
+      for (const id of recordingIds) {
+        await unifiedRecordingsService.deleteRecording(id);
+      }
+      
+      // Update local state
+      setRecordings(prev => prev.filter(rec => !recordingIds.includes(rec.id)));
+      setSelectedRecordings(new Set());
+      setShowDeleteDialog(false);
+      
+      // Clear selected recording if it was deleted
+      if (selectedRecording && recordingIds.includes(selectedRecording.id)) {
+        setSelectedRecording(null);
+        setAudioUrl(null);
+      }
+    } catch (error) {
+      console.error('Error deleting recordings:', error);
+      alert('Failed to delete recordings. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const toggleRecordingSelection = (recordingId: string) => {
+    setSelectedRecordings(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(recordingId)) {
+        newSet.delete(recordingId);
+      } else {
+        newSet.add(recordingId);
+      }
+      return newSet;
+    });
+  };
+
+  // Add this before the renderRecordingItem function
+  const renderDeleteDialog = () => (
+    <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Delete Recordings</DialogTitle>
+          <p className="text-sm text-muted-foreground">
+            Are you sure you want to delete {selectedRecordings.size} recording{selectedRecordings.size !== 1 ? 's' : ''}? This action cannot be undone.
+          </p>
+        </DialogHeader>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => setShowDeleteDialog(false)}
+            disabled={isDeleting}
+          >
+            Cancel
+          </Button>
+          <Button
+            variant="destructive"
+            onClick={() => handleDelete(Array.from(selectedRecordings))}
+            disabled={isDeleting}
+          >
+            {isDeleting ? 'Deleting...' : 'Delete'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
+  // Memoize the renderRecordingItem function
+  const renderRecordingItem = useCallback((recording: Recording, isDateView: boolean = false) => (
     <div 
       key={recording.id}
       className={`border-b border-slate-200 dark:border-slate-800 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-900/30 transition-colors 
         ${selectedRecording?.id === recording.id ? 'bg-blue-50 dark:bg-blue-900/20' : ''}`}
-      onClick={(e) => {
-        e.preventDefault();
-        setSelectedRecording(recording);
-      }}
+      onClick={() => setSelectedRecording(recording)}
     >
       <div className="flex items-center gap-0.5 px-2 py-1">
+        {/* Add checkbox for selection */}
+        <div 
+          className="mr-2"
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleRecordingSelection(recording.id);
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={selectedRecordings.has(recording.id)}
+            onChange={() => {}}
+            className="h-4 w-4 rounded border-gray-300"
+          />
+        </div>
+
         <span className="text-slate-500 text-[10px]">♪</span>
         <span className="text-[10px] font-medium text-slate-700 dark:text-slate-300 truncate mr-auto">{formatRecordingName(recording)}</span>
         
         <span className={`h-1 w-1 rounded-full flex-shrink-0 ${recording.is_processed ? 'bg-green-500' : 'bg-yellow-500'} mx-0.5`} title={recording.is_processed ? "Processed" : "Not processed"} />
         
         <div className="flex items-center gap-1 flex-shrink-0">
+          {/* Display Tags */}
+          <div className="flex items-center gap-1 mr-2">
+            {recordingTags[recording.id]?.slice(0, 4).map(tag => (
+              <div 
+                key={tag.id}
+                className={`px-1.5 py-0.5 rounded-full text-[8px] font-medium border ${TAG_COLORS.find(c => c.value === tag.color)?.class} cursor-pointer hover:opacity-80 transition-opacity`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (activeTagFilters.some(filterTag => 
+                    filterTag.name === tag.name && filterTag.color === tag.color
+                  )) {
+                    setActiveTagFilters(prev => 
+                      prev.filter(filterTag => 
+                        filterTag.name !== tag.name || filterTag.color !== tag.color
+                      )
+                    );
+                  } else {
+                    setActiveTagFilters(prev => [...prev, tag]);
+                  }
+                }}
+                title={`${activeTagFilters.some(filterTag => 
+  filterTag.name === tag.name && filterTag.color === tag.color
+) ? "Click to remove filter" : "Click to filter by"} "${tag.name}"`}
+              >
+                {tag.name}
+              </div>
+            ))}
+            {recordingTags[recording.id]?.length > 4 && (
+              <div 
+                className="px-1.5 py-0.5 rounded-full text-[8px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700"
+                title={`${recordingTags[recording.id].length - 4} more tags`}
+              >
+                +{recordingTags[recording.id].length - 4}
+              </div>
+            )}
+          </div>
+
           <span className="text-[8px] text-slate-500 dark:text-slate-400 flex items-center">
             <Clock className="mr-0.5 h-2 w-2" />
             {recording.duration_seconds > 0 ? formatDuration(recording.duration_seconds) : "..."}
@@ -1404,6 +1900,34 @@ Key Points:
           >
             <Brain className={`h-2.5 w-2.5 text-slate-500 transition-transform duration-200 ${expandedAnalysis[recording.id] ? 'rotate-180' : ''}`} />
           </Button>
+
+          {/* Add Tag Button */}
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-4 w-4 p-0 flex-shrink-0"
+                title="Edit Tags"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <TagIcon className="h-2.5 w-2.5 text-slate-500" />
+              </Button>
+            </DialogTrigger>
+            <TagEditorModal 
+              recording={recording}
+              existingTags={recordingTags[recording.id] || []}
+              onSave={async (tags) => {
+                await saveTags(recording.id, tags);
+              }}
+              onClose={() => {
+                const dialogClose = document.querySelector('[data-dialog-close]');
+                if (dialogClose instanceof HTMLElement) {
+                  dialogClose.click();
+                }
+              }}
+            />
+          </Dialog>
 
           <Link 
             href={`/dashboard/recordings/${recording.id}`} 
@@ -1539,7 +2063,177 @@ Key Points:
         </div>
       )}
     </div>
+  ), [selectedRecording, selectedRecordings, toggleRecordingSelection]);
+
+  // Add loading indicator to search bar
+  const renderSearchBar = () => (
+    <div className="relative flex-1">
+      <Search className="absolute left-2.5 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
+      <Input 
+        placeholder={`Search ${searchType === "filename" ? "file names" : 
+          searchType === "transcript" ? "transcript contents" :
+          searchType === "tags" ? "tags" : "interactions"}...`}
+        className="pl-8 h-7 text-xs bg-white dark:bg-slate-900 border-blue-200 dark:border-blue-800" 
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+      />
+      {isSearchingTranscripts && searchType === "transcript" && (
+        <div className="absolute right-2.5 top-1.5 flex items-center gap-1.5">
+          <div className="animate-spin h-3.5 w-3.5 border-2 border-primary rounded-full border-t-transparent"></div>
+          <span className="text-xs text-muted-foreground">Searching transcripts...</span>
+        </div>
+      )}
+    </div>
   );
+
+  // Add bulk action controls to the search bar area
+  const renderBulkActions = () => (
+    <div className="flex items-center gap-2">
+      {selectedRecordings.size > 0 && (
+        <>
+          <div className="bg-slate-100 dark:bg-slate-800 rounded-md px-2 py-1 flex items-center gap-1.5">
+            <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
+              {selectedRecordings.size} selected
+            </span>
+          </div>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="destructive"
+                  size="icon"
+                  onClick={() => setShowDeleteDialog(true)}
+                  className="h-7 w-7"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Delete selected recordings (Delete)</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setSelectedRecordings(new Set())}
+                  className="h-7 w-7"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Clear selection (Ctrl/Cmd + A)</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        </>
+      )}
+    </div>
+  );
+
+  // Add keyboard shortcut handler
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Delete selected recordings with Delete key
+      if (e.key === 'Delete' && selectedRecordings.size > 0) {
+        setShowDeleteDialog(true);
+      }
+      
+      // Select all with Ctrl/Cmd + A
+      if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+        e.preventDefault();
+        const allIds = new Set(recordings.map(r => r.id));
+        setSelectedRecordings(prev => 
+          prev.size === allIds.size ? new Set() : allIds
+        );
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedRecordings, recordings]);
+
+  // Add rename handler
+  const handleRename = async (id: string, newName: string, newDescription: string) => {
+    try {
+      const recording = recordings.find(r => r.id === id);
+      if (!recording) return;
+
+      // Keep the date part of the name if it exists
+      const dateMatch = recording.name.match(/^\d{6}_\d{6}/);
+      const datePart = dateMatch ? dateMatch[0] : "";
+      
+      // Construct the new name
+      const finalName = datePart 
+        ? `${datePart}_${newName.trim()}.mp3`
+        : `${newName.trim()}.mp3`;
+
+      if (storageLocation === 'local') {
+        const localRecording = await indexedDBService.getRecording(id);
+        if (!localRecording) {
+          throw new Error('Recording not found in local storage');
+        }
+
+        await indexedDBService.updateRecording({
+          ...localRecording,
+          name: finalName,
+          description: newDescription.trim() || null
+        });
+      } else {
+        const supabase = getSupabaseClient();
+        const { error } = await supabase
+          .from('recordings')
+          .update({ 
+            name: finalName,
+            description: newDescription.trim() || null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', id);
+
+        if (error) throw error;
+      }
+
+      // Update local state
+      setRecordings(prev => prev.map(rec => 
+        rec.id === id 
+          ? { ...rec, name: finalName, description: newDescription.trim() || null }
+          : rec
+      ));
+    } catch (error) {
+      console.error('Error renaming recording:', error);
+      throw error;
+    }
+  };
+
+  // Add these memoized values near the top of the LibraryTab component
+  const memoizedRecordingIds = useMemo(() => new Set(recordings.map(r => r.id)), [recordings]);
+
+  // Memoize the checkbox toggle handler
+  const memoizedToggleRecordingSelection = useCallback((recordingId: string) => {
+    setSelectedRecordings(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(recordingId)) {
+        newSet.delete(recordingId);
+      } else {
+        newSet.add(recordingId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  // Memoize search type change handler
+  const handleSearchTypeChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    setSearchType(e.target.value as "filename" | "transcript" | "tags" | "interaction");
+  }, []);
+
+  // Memoize search query change handler
+  const handleSearchQueryChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setSearchQuery(e.target.value);
+  }, []);
 
   return (
     <div className="space-y-4">
@@ -1648,22 +2342,123 @@ Key Points:
 
       {/* Search Bar - Full Width */}
       <div className="relative flex gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-2.5 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
-          <Input 
-            placeholder={`Search ${searchType === "filename" ? "file names" : 
-              searchType === "transcript" ? "transcript contents" :
-              searchType === "tags" ? "tags" : "interactions"}...`}
-            className="pl-8 h-7 text-xs bg-white dark:bg-slate-900 border-blue-200 dark:border-blue-800" 
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
+        {renderSearchBar()}
+        {renderBulkActions()}
+        
+        {/* Tag Filters */}
+        <div className="flex items-center gap-2">
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="h-7 px-2 flex items-center gap-1"
+              >
+                <TagIcon className="h-3.5 w-3.5" />
+                <span>Filter by Tags</span>
+                {activeTagFilters.length > 0 && (
+                  <span className="ml-1 bg-primary/20 text-primary rounded-full px-1.5 text-xs">
+                    {activeTagFilters.length}
+                  </span>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-80 p-3">
+              <div className="space-y-3">
+                <h4 className="font-medium text-sm">Filter by Tags</h4>
+                {getAllUniqueTags.length > 0 ? (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap gap-2">
+                      {getAllUniqueTags.map(tag => (
+                        <div
+                          key={`${tag.name}-${tag.color}`}
+                          className={`px-2 py-1 rounded-full text-xs font-medium border cursor-pointer transition-all
+                            ${TAG_COLORS.find(c => c.value === tag.color)?.class}
+                            ${activeTagFilters.some(t => t.name === tag.name && t.color === tag.color) 
+                              ? 'ring-2 ring-primary shadow-sm' 
+                              : 'opacity-70 hover:opacity-100'}`}
+                          onClick={() => {
+                            setActiveTagFilters(prev => {
+                              const isSelected = prev.some(t => 
+                                t.name === tag.name && t.color === tag.color
+                              );
+                              if (isSelected) {
+                                return prev.filter(t => 
+                                  t.name !== tag.name || t.color !== tag.color
+                                );
+                              } else {
+                                return [...prev, tag];
+                              }
+                            });
+                          }}
+                        >
+                          {tag.name}
+                        </div>
+                      ))}
+                    </div>
+                    {activeTagFilters.length > 0 && (
+                      <div className="pt-2 flex justify-between items-center border-t">
+                        <span className="text-xs text-muted-foreground">
+                          {activeTagFilters.length} tag{activeTagFilters.length !== 1 ? 's' : ''} selected
+                        </span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setActiveTagFilters([])}
+                          className="h-7 px-2 text-xs"
+                        >
+                          Clear All
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted-foreground text-center py-2">
+                    No tags available
+                  </div>
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+
+          {/* Active Tag Filters Display */}
+          {activeTagFilters.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              {activeTagFilters.map(tag => (
+                <div
+                  key={`${tag.name}-${tag.color}`}
+                  className={`px-2 py-1 rounded-full text-xs font-medium border flex items-center gap-1
+                    ${TAG_COLORS.find(c => c.value === tag.color)?.class}`}
+                >
+                  {tag.name}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-4 w-4 p-0 hover:bg-red-100 dark:hover:bg-red-900/30"
+                    onClick={() => setActiveTagFilters(prev => 
+                      prev.filter(t => t.name !== tag.name || t.color !== tag.color)
+                    )}
+                  >
+                    <X className="h-3 w-3 text-red-600 dark:text-red-400" />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs hover:bg-red-100 dark:hover:bg-red-900/30"
+                onClick={() => setActiveTagFilters([])}
+              >
+                Clear All
+              </Button>
+            </div>
+          )}
         </div>
         
         <select
           className="h-7 text-xs bg-white dark:bg-slate-900 border border-blue-200 dark:border-blue-800 rounded-md px-2 focus:outline-none focus:ring-1 focus:ring-blue-500"
           value={searchType}
-          onChange={(e) => setSearchType(e.target.value as "filename" | "transcript" | "tags" | "interaction")}
+          onChange={handleSearchTypeChange}
         >
           <option value="filename">File Name</option>
           <option value="transcript">Transcript</option>
@@ -1671,6 +2466,8 @@ Key Points:
           <option value="interaction">Interaction</option>
         </select>
       </div>
+
+      {renderDeleteDialog()}
 
       {/* Global Filters Row */}
       <div className="flex items-center gap-3 bg-white dark:bg-slate-900 py-2 px-3 rounded-lg border border-blue-200 dark:border-blue-800 shadow-sm">
@@ -2098,7 +2895,7 @@ Key Points:
                             Week {currentWeek}
                           </div>
                           <div className="text-slate-600 dark:text-slate-400">
-                            {getRecordingsForWeek(currentWeek).length} recordings
+                            {currentWeekRecordings.length} recordings
                           </div>
                         </div>
                       </div>
@@ -2124,7 +2921,7 @@ Key Points:
                     {selectedHourInfo
                       ? "No recordings found for this hour"
                       : isWeekView 
-                        ? searchQuery && getRecordingsForWeek(currentWeek).length > 0
+                        ? searchQuery && currentWeekRecordings.length > 0
                           ? "No recordings matching your search for this week"
                           : "No recordings for this week" 
                         : selectedDate
@@ -2200,7 +2997,312 @@ Key Points:
           </ScrollArea>
         </DialogContent>
       </Dialog>
+
+      {/* Add RenameDialog */}
+      <RenameDialog
+        open={showRenameDialog}
+        onOpenChange={setShowRenameDialog}
+        recording={recordingToRename}
+        onSave={handleRename}
+      />
     </div>
   )
 }
+
+// Tag Editor Modal Component
+const TagEditorModal = ({ 
+  recording, 
+  onClose,
+  existingTags,
+  onSave
+}: { 
+  recording: Recording; 
+  onClose: () => void;
+  existingTags: Tag[];
+  onSave: (tags: Tag[]) => Promise<void>;
+}) => {
+  const [tags, setTags] = useState<Tag[]>(existingTags);
+  const [newTagName, setNewTagName] = useState('');
+  const [selectedColor, setSelectedColor] = useState(TAG_COLORS[0].value);
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Group tags by color for better organization
+  const groupedTags = useMemo(() => {
+    return tags.reduce((acc, tag) => {
+      const colorGroup = acc[tag.color] || [];
+      return {
+        ...acc,
+        [tag.color]: [...colorGroup, tag]
+      };
+    }, {} as Record<string, Tag[]>);
+  }, [tags]);
+
+  const addTag = () => {
+    if (newTagName.trim()) {
+      setTags([...tags, { 
+        id: crypto.randomUUID(), 
+        name: newTagName.trim(), 
+        color: selectedColor 
+      }]);
+      setNewTagName('');
+    }
+  };
+
+  const removeTag = (tagId: string) => {
+    setTags(tags.filter(tag => tag.id !== tagId));
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addTag();
+    }
+  };
+
+  const handleSave = async () => {
+    try {
+      setIsSaving(true);
+      await onSave(tags);
+      onClose();
+    } catch (error) {
+      console.error('Error saving tags:', error);
+      alert('Failed to save tags. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <DialogContent className="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle className="text-xl flex items-center gap-2">
+          <TagIcon className="h-5 w-5 text-primary" />
+          Edit Tags
+        </DialogTitle>
+        <p className="text-sm text-muted-foreground">
+          {recording.name}
+        </p>
+      </DialogHeader>
+
+      <div className="space-y-4 py-4">
+        {/* Current Tags */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <label className="text-sm font-medium">Current Tags ({tags.length})</label>
+            {tags.length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                Click on a tag to remove it
+              </span>
+            )}
+          </div>
+          
+          {Object.entries(groupedTags).map(([color, colorTags]) => (
+            <div key={color} className="space-y-2">
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${TAG_COLORS.find(c => c.value === color)?.class}`} />
+                <span className="text-xs font-medium">{TAG_COLORS.find(c => c.value === color)?.name}</span>
+              </div>
+              <div className="flex flex-wrap gap-2 pl-4">
+                {colorTags.map(tag => (
+                  <div 
+                    key={tag.id}
+                    className={`px-2 py-1 rounded-full text-xs font-medium border flex items-center gap-1.5 cursor-pointer hover:opacity-80 transition-opacity ${TAG_COLORS.find(c => c.value === color)?.class}`}
+                    onClick={() => removeTag(tag.id)}
+                    title="Click to remove"
+                  >
+                    <span>{tag.name}</span>
+                    <TagIcon className="h-3 w-3 opacity-50" />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+          
+          {tags.length === 0 && (
+            <div className="text-sm text-muted-foreground bg-muted/50 rounded-lg p-4 text-center">
+              No tags added yet. Add your first tag below.
+            </div>
+          )}
+        </div>
+
+        {/* Add New Tag */}
+        <div className="space-y-2 pt-2 border-t">
+          <label className="text-sm font-medium">Add New Tag</label>
+          <div className="flex gap-2">
+            <Input
+              value={newTagName}
+              onChange={(e) => setNewTagName(e.target.value)}
+              onKeyPress={handleKeyPress}
+              placeholder="Enter tag name"
+              className="flex-1"
+            />
+            <select
+              value={selectedColor}
+              onChange={(e) => setSelectedColor(e.target.value)}
+              className="px-3 py-2 bg-white dark:bg-slate-900 border border-input rounded-md text-sm"
+            >
+              {TAG_COLORS.map(color => (
+                <option key={color.value} value={color.value}>
+                  {color.name}
+                </option>
+              ))}
+            </select>
+            <Button 
+              onClick={addTag} 
+              disabled={!newTagName.trim()}
+              className="shrink-0"
+            >
+              Add Tag
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button onClick={handleSave} disabled={isSaving}>
+          {isSaving ? 'Saving...' : 'Save Changes'}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+};
+
+// Add RenameDialog component
+const RenameDialog = ({
+  open,
+  onOpenChange,
+  recording,
+  onSave
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  recording: Recording | null;
+  onSave: (id: string, newName: string, newDescription: string) => Promise<void>;
+}) => {
+  const [formState, setFormState] = useState({
+    name: "",
+    description: "",
+    isSaving: false
+  });
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Reset form when dialog opens
+  useEffect(() => {
+    if (open && recording) {
+      // Remove date prefix and .mp3 extension for display
+      const displayName = recording.name.replace(/^\d{6}_\d{6}_?/, "").replace(/\.mp3$/, "");
+      setFormState(prev => ({
+        ...prev,
+        name: displayName,
+        description: displayName // Set description to match name initially
+      }));
+      // Focus input after dialog animation
+      setTimeout(() => inputRef.current?.focus(), 100);
+    } else {
+      // Reset form when dialog closes
+      setFormState({
+        name: "",
+        description: "",
+        isSaving: false
+      });
+    }
+  }, [open, recording]);
+
+  const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newName = e.target.value;
+    setFormState(prev => ({
+      ...prev,
+      name: newName,
+      description: newName // Update description to match name
+    }));
+  };
+
+  const handleDescriptionChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setFormState(prev => ({
+      ...prev,
+      description: e.target.value // Allow manual description override
+    }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!recording || !formState.name.trim() || formState.isSaving) return;
+
+    try {
+      setFormState(prev => ({ ...prev, isSaving: true }));
+      await onSave(recording.id, formState.name, formState.description);
+      onOpenChange(false);
+    } catch (error) {
+      console.error("Error saving:", error);
+      alert("Failed to save changes. Please try again.");
+    } finally {
+      setFormState(prev => ({ ...prev, isSaving: false }));
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <form onSubmit={handleSubmit}>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Pencil className="h-5 w-5 text-primary" />
+              Rename Recording
+            </DialogTitle>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">
+                Current Name
+              </label>
+              <p className="text-sm text-muted-foreground">
+                {recording?.name || ""}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="name" className="text-sm font-medium">
+                New Name
+              </label>
+              <Input
+                id="name"
+                ref={inputRef}
+                value={formState.name}
+                onChange={handleNameChange}
+                placeholder="Enter new name"
+                disabled={formState.isSaving}
+              />
+              <p className="text-xs text-muted-foreground">
+                The date prefix will be preserved automatically.
+              </p>
+            </div>
+
+        
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={formState.isSaving}
+            >
+              Cancel
+            </Button>
+            <Button 
+              type="submit"
+              disabled={formState.isSaving || !formState.name.trim()}
+            >
+              {formState.isSaving ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+};
 

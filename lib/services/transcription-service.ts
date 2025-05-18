@@ -19,6 +19,13 @@ interface TranscriptionResult {
   topics?: any[]
   summary?: string
   duration_seconds?: number
+  entities?: Array<{
+    text: string
+    type: 'person' | 'organization'
+    start: number
+    end: number
+    confidence: number
+  }>
   error?: string
 }
 

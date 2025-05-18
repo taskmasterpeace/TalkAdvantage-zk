@@ -35,6 +35,7 @@ async function uploadToCloud(userId: string, file: File, params: CreateRecording
     if (params.description) formData.append('description', params.description);
     if (params.durationSeconds) formData.append('durationSeconds', params.durationSeconds.toString());
     formData.append('isPublic', (params.isPublic || false).toString());
+    if (params.tags) formData.append('tags', params.tags);
     
     // Upload using our API route
     console.log(`Sending file to API endpoint`);
@@ -65,10 +66,18 @@ export const unifiedRecordingsService = {
    */
   async getRecordings(userId: string): Promise<Recording[]> {
     const { storageLocation } = useSettingsStore.getState()
+    console.log("Getting recordings with storage location:", storageLocation);
     
     if (storageLocation === "local") {
-      const localRecordings = await indexedDBService.getRecordings(userId)
-      return localRecordings.map(mapLocalToCommon)
+      console.log("Fetching local recordings for user:", userId);
+      try {
+        const localRecordings = await indexedDBService.getRecordings(userId)
+        console.log("Found local recordings:", localRecordings.length);
+        return localRecordings.map(mapLocalToCommon)
+      } catch (error) {
+        console.error("Error fetching local recordings:", error);
+        return [];
+      }
     } else {
       return recordingsService.getRecordings(userId)
     }
@@ -93,18 +102,27 @@ export const unifiedRecordingsService = {
    */
   async createRecording(userId: string, file: File, params: CreateRecordingParams): Promise<Recording> {
     const { storageLocation } = useSettingsStore.getState()
+    console.log("Creating recording with storage location:", storageLocation);
     
     if (storageLocation === "local") {
-      // Convert params to local format
-      const localParams: CreateLocalRecordingParams = {
-        name: params.name,
-        description: params.description,
-        durationSeconds: params.durationSeconds,
-        isPublic: params.isPublic,
+      console.log("Creating local recording:", { userId, fileName: file.name, params });
+      try {
+        // Convert params to local format
+        const localParams: CreateLocalRecordingParams = {
+          name: params.name,
+          description: params.description,
+          durationSeconds: params.durationSeconds,
+          isPublic: params.isPublic,
+          tags: params.tags,
+        }
+        
+        const localRecording = await indexedDBService.createRecording(userId, file, localParams)
+        console.log("Local recording created:", localRecording.id);
+        return mapLocalToCommon(localRecording)
+      } catch (error) {
+        console.error("Error creating local recording:", error);
+        throw error;
       }
-      
-      const localRecording = await indexedDBService.createRecording(userId, file, localParams)
-      return mapLocalToCommon(localRecording)
     } else {
       // For cloud storage, use the API endpoint
       return uploadToCloud(userId, file, params)

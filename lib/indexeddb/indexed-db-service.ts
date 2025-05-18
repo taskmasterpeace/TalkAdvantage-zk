@@ -19,6 +19,7 @@ export interface LocalRecording {
   isPublic: boolean
   transcript?: string | null
   summary?: string | null
+  tags?: string | null  // JSON string of Tag[] - [{id: string, name: string, color: string}]
 }
 
 export interface CreateLocalRecordingParams {
@@ -26,6 +27,7 @@ export interface CreateLocalRecordingParams {
   description?: string
   durationSeconds?: number
   isPublic?: boolean
+  tags?: string // JSON string of Tag[] - [{id: string, name: string, color: string}]
 }
 
 /**
@@ -33,6 +35,7 @@ export interface CreateLocalRecordingParams {
  */
 async function initDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    console.log("Initializing IndexedDB...")
     const request = indexedDB.open(DB_NAME, DB_VERSION)
 
     request.onerror = (event) => {
@@ -41,20 +44,25 @@ async function initDB(): Promise<IDBDatabase> {
     }
 
     request.onsuccess = (event) => {
+      console.log("IndexedDB opened successfully")
       const db = (event.target as IDBOpenDBRequest).result
       resolve(db)
     }
 
     request.onupgradeneeded = (event) => {
+      console.log("Upgrading IndexedDB...")
       const db = (event.target as IDBOpenDBRequest).result
       
       // Create the recordings store if it doesn't exist
       if (!db.objectStoreNames.contains(RECORDINGS_STORE)) {
+        console.log("Creating recordings store...")
         const store = db.createObjectStore(RECORDINGS_STORE, { keyPath: "id" })
         
         // Create indexes for faster lookup
         store.createIndex("userId", "userId", { unique: false })
         store.createIndex("createdAt", "createdAt", { unique: false })
+        store.createIndex("name", "name", { unique: false })
+        store.createIndex("tags", "tags", { unique: false })
         
         console.log("Created IndexedDB stores and indexes")
       }
@@ -78,6 +86,7 @@ export const indexedDBService = {
    * Get all recordings for a user
    */
   async getRecordings(userId: string): Promise<LocalRecording[]> {
+    console.log("Getting recordings for user:", userId)
     try {
       const db = await initDB()
       
@@ -88,6 +97,7 @@ export const indexedDBService = {
         const request = userIndex.getAll(userId)
         
         request.onsuccess = () => {
+          console.log(`Found ${request.result.length} recordings for user ${userId}`)
           resolve(request.result)
         }
         
@@ -100,7 +110,7 @@ export const indexedDBService = {
       })
     } catch (error) {
       console.error("Error in getRecordings:", error)
-      throw error
+      return [] // Return empty array instead of throwing
     }
   },
   
@@ -141,6 +151,7 @@ export const indexedDBService = {
     file: File, 
     params: CreateLocalRecordingParams
   ): Promise<LocalRecording> {
+    console.log("Creating local recording:", { userId, fileName: file.name, params })
     try {
       const db = await initDB()
       
@@ -154,6 +165,9 @@ export const indexedDBService = {
         createdAt: new Date().toISOString(),
         isProcessed: false,
         isPublic: params.isPublic || false,
+        transcript: null,
+        summary: null,
+        tags: params.tags || null,
       }
       
       return new Promise((resolve, reject) => {
@@ -328,6 +342,36 @@ export const indexedDBService = {
     } catch (error) {
       console.error("Error in addTranscriptToRecording:", error)
       throw error
+    }
+  },
+  
+  /**
+   * Update a recording
+   */
+  async updateRecording(updatedRecording: LocalRecording): Promise<LocalRecording | null> {
+    try {
+      const db = await initDB();
+      
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction([RECORDINGS_STORE], "readwrite");
+        const store = transaction.objectStore(RECORDINGS_STORE);
+        const request = store.put(updatedRecording);
+        
+        request.onsuccess = () => {
+          console.log("Recording updated in IndexedDB:", updatedRecording.id);
+          resolve(updatedRecording);
+        };
+        
+        request.onerror = (event) => {
+          console.error("Error updating recording:", event);
+          reject(new Error("Failed to update recording in IndexedDB"));
+        };
+        
+        transaction.oncomplete = () => db.close();
+      });
+    } catch (error) {
+      console.error("Error in updateRecording:", error);
+      throw error;
     }
   }
 } 

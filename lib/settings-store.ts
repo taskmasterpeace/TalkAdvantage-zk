@@ -19,6 +19,13 @@ interface SettingsState {
   audioQuality: AudioQualityOption
   volume: number
 
+  // Recording Settings
+  silenceDetection: {
+    enabled: boolean
+    thresholdMinutes: number
+    autoStopSeconds: number
+  }
+
   // API Keys
   assemblyAIKey: string
   openRouterKey: string
@@ -103,6 +110,11 @@ interface SettingsState {
   setTrackingModeSilenceTimeoutSeconds: (seconds: number) => void
   setTrackingModeMaxThoughtsHistory: (count: number) => void
 
+  // Silence Detection Methods
+  setSilenceDetectionEnabled: (enabled: boolean) => void
+  setSilenceThresholdMinutes: (minutes: number) => void
+  setSilenceAutoStopSeconds: (seconds: number) => void
+
   resetSettings: () => void
 }
 
@@ -111,6 +123,14 @@ const defaultSettings = {
   autoSave: true,
   audioQuality: "high" as AudioQualityOption,
   volume: 80,
+
+  // Default Silence Detection Settings
+  silenceDetection: {
+    enabled: true,
+    thresholdMinutes: 7,
+    autoStopSeconds: 30
+  },
+
   assemblyAIKey: "",
   openRouterKey: "",
   aiBaseURL: "https://api.openai.com/v1",
@@ -463,6 +483,31 @@ export const useSettingsStore = create<SettingsState>()(
           },
         })),
 
+      // Silence Detection Setters
+      setSilenceDetectionEnabled: (enabled) =>
+        set((state) => ({
+          silenceDetection: {
+            ...state.silenceDetection,
+            enabled
+          }
+        })),
+
+      setSilenceThresholdMinutes: (minutes) =>
+        set((state) => ({
+          silenceDetection: {
+            ...state.silenceDetection,
+            thresholdMinutes: minutes
+          }
+        })),
+
+      setSilenceAutoStopSeconds: (seconds) =>
+        set((state) => ({
+          silenceDetection: {
+            ...state.silenceDetection,
+            autoStopSeconds: seconds
+          }
+        })),
+
       resetSettings: () => set(defaultSettings),
     }),
     {
@@ -481,6 +526,7 @@ export const useSettingsStore = create<SettingsState>()(
         aiSiteName: state.aiSiteName,
         systemProps: state.systemProps,
         storageLocation: state.storageLocation,
+        silenceDetection: state.silenceDetection,
       }),
     },
   ),

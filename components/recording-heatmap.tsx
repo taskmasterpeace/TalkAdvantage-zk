@@ -125,10 +125,10 @@ export function RecordingHeatmap({
   
   // Get colored cell class based on intensity
   const getCellClass = (intensity: number, isSelected: boolean) => {
-    if (intensity === 0) return "bg-slate-100 dark:bg-slate-800";
-    if (intensity <= 0.25) return "bg-emerald-100 dark:bg-emerald-900/40";
-    if (intensity <= 0.5) return "bg-emerald-300 dark:bg-emerald-700";
-    if (intensity <= 0.75) return "bg-emerald-500 dark:bg-emerald-500";
+    if (intensity === 0) return "bg-slate-100 dark:bg-slate-800/60";
+    if (intensity <= 0.25) return "bg-emerald-100 dark:bg-emerald-800";
+    if (intensity <= 0.5) return "bg-emerald-300 dark:bg-emerald-600";
+    if (intensity <= 0.75) return "bg-emerald-500 dark:bg-emerald-400";
     return "bg-emerald-700 dark:bg-emerald-300";
   }
   
