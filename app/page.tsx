@@ -717,14 +717,14 @@ export default function LandingPage() {
                   </a>
                 </li>
                 <li>
-                  <a href="#" className="text-muted-foreground hover:text-primary">
+                  <Link href="/privacy" className="text-muted-foreground hover:text-primary">
                     Privacy Policy
-                  </a>
+                  </Link>
                 </li>
                 <li>
-                  <a href="#" className="text-muted-foreground hover:text-primary">
+                  <Link href="/terms" className="text-muted-foreground hover:text-primary">
                     Terms of Service
-                  </a>
+                  </Link>
                 </li>
               </ul>
             </div>
