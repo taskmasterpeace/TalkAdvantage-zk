@@ -5,17 +5,48 @@ import { getSupabaseServerClient } from "@/lib/supabase"
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData()
-    const file = formData.get("file") as File | null
+    let file = formData.get("file") as File | null
     const audioUrl = formData.get("audioUrl") as string | null
     const speakerLabels = formData.get("speakerLabels") === "true"
     const timestamps = formData.get("timestamps") === "true"
     const sentimentAnalysis = formData.get("sentimentAnalysis") === "true"
     const topicDetection = formData.get("topicDetection") === "true"
     const summarization = formData.get("summarization") === "true"
+    const entityDetection = formData.get("entityDetection") === "true"
     const summaryType = formData.get("summaryType") as "bullets" | "paragraph" | "headline" | undefined
+    const isLocal = formData.get("isLocal") === "true"
 
     if (!file && !audioUrl) {
       return NextResponse.json({ error: "Either file or audioUrl must be provided" }, { status: 400 })
+    }
+
+    // If we have a data URL from a local file, convert it to a File object
+    if (!file && audioUrl && isLocal && audioUrl.startsWith('data:')) {
+      try {
+        // Extract the base64 data from the data URL
+        const [header, base64Data] = audioUrl.split(',')
+        const mimeType = header.split(';')[0].split(':')[1]
+        
+        // Convert base64 to blob
+        const byteCharacters = atob(base64Data)
+        const byteArrays = []
+        for (let offset = 0; offset < byteCharacters.length; offset += 1024) {
+          const slice = byteCharacters.slice(offset, offset + 1024)
+          const byteNumbers = new Array(slice.length)
+          for (let i = 0; i < slice.length; i++) {
+            byteNumbers[i] = slice.charCodeAt(i)
+          }
+          const byteArray = new Uint8Array(byteNumbers)
+          byteArrays.push(byteArray)
+        }
+        const blob = new Blob(byteArrays, { type: mimeType })
+        
+        // Create a File object from the blob
+        file = new File([blob], 'local-recording.mp3', { type: mimeType })
+      } catch (error) {
+        console.error("Error converting data URL to file:", error)
+        return NextResponse.json({ error: "Failed to process local audio file" }, { status: 500 })
+      }
     }
 
     // Validate file size if a file was provided
@@ -28,7 +59,7 @@ export async function POST(request: NextRequest) {
 
     let transcriptionUrl = audioUrl
 
-    // If a file was uploaded, we need to upload it to AssemblyAI first
+    // If a file was uploaded or converted from data URL, we need to upload it to AssemblyAI first
     if (file) {
       const uploadResult = await uploadAudioFile(file)
 
@@ -52,6 +83,7 @@ export async function POST(request: NextRequest) {
       summarization,
       summaryType,
       webhookUrl,
+      entityDetection,
     })
 
     if (!transcriptionResult.success) {
@@ -68,22 +100,24 @@ export async function POST(request: NextRequest) {
     // If we have a recording ID, update the recording in Supabase
     const recordingId = formData.get("recordingId") as string | null
     if (recordingId) {
-      const supabase = await getSupabaseServerClient()
+      if (!isLocal) {
+        const supabase = await getSupabaseServerClient()
 
-      // Update the recording
-      await supabase
-        .from("recordings")
-        .update({
-          is_processed: true,
-          duration_seconds: durationSeconds,
+        // Update the recording
+        await supabase
+          .from("recordings")
+          .update({
+            is_processed: true,
+            duration_seconds: durationSeconds,
+          })
+          .eq("id", recordingId)
+
+        // Create transcript entry
+        await supabase.from("transcripts").insert({
+          recording_id: recordingId,
+          full_text: transcriptionResult.transcript,
         })
-        .eq("id", recordingId)
-
-      // Create transcript entry
-      await supabase.from("transcripts").insert({
-        recording_id: recordingId,
-        full_text: transcriptionResult.transcript
-      })
+      }
     }
 
     return NextResponse.json({
@@ -95,6 +129,7 @@ export async function POST(request: NextRequest) {
       sentiment: transcriptionResult.sentiment,
       topics: transcriptionResult.topics,
       summary: transcriptionResult.summary,
+      entities: transcriptionResult.entities,
       duration_seconds: durationSeconds,
     })
   } catch (error) {

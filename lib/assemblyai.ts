@@ -26,6 +26,7 @@ export async function transcribeAudioFromUrl(
     summarization?: boolean
     summaryType?: "bullets" | "paragraph" | "headline"
     webhookUrl?: string
+    entityDetection?: boolean
   },
 ) {
   const client = getAssemblyAIClient()
@@ -46,6 +47,7 @@ export async function transcribeAudioFromUrl(
       summarization: options.summarization,
       summary_type: options.summaryType,
       webhook_url: options.webhookUrl,
+      entity_detection: options.entityDetection,
     })
 
     return {
@@ -57,6 +59,7 @@ export async function transcribeAudioFromUrl(
       sentiment: transcript.sentiment_analysis_results,
       topics: transcript.iab_categories_result,
       summary: transcript.summary,
+      entities: transcript.entities,
       error: null,
     }
   } catch (error) {

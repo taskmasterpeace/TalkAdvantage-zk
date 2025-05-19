@@ -14,7 +14,7 @@ import { Slider } from "@/components/ui/slider"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
-import { useToast } from "@/hooks/use-toast"
+import { toast } from "sonner"
 import {
   Save,
   Key,
@@ -45,6 +45,19 @@ import {
   type QuestionType,
 } from "@/lib/settings-store"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import { useToast } from "@/components/ui/use-toast"
+import { ToastAction } from "@/components/ui/toast"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import SilenceAlertDialog from "./silence-alert-dialog"
 
 interface SettingsModalProps {
   open: boolean
@@ -60,6 +73,9 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
   const [keyStatus, setKeyStatus] = useState<"idle" | "valid" | "invalid">("idle")
   const [showApiKey, setShowApiKey] = useState(false)
   const [isResetting, setIsResetting] = useState(false)
+  const [showSilenceAlert, setShowSilenceAlert] = useState(false)
+  const [silenceAlertType, setSilenceAlertType] = useState<'initial' | 'stopped' | 'continued'>('initial')
+  const [autoStopTimer, setAutoStopTimer] = useState<NodeJS.Timeout | null>(null)
 
   // Local state for form values
   const [localSettings, setLocalSettings] = useState({
@@ -76,6 +92,7 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
     aiSiteName: settings.aiSiteName || "TalkAdvantage",
     systemProps: settings.systemProps,
     storageLocation: settings.storageLocation,
+    silenceDetection: settings.silenceDetection,
   })
 
   // Update local state when settings change
@@ -95,6 +112,7 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
         aiSiteName: settings.aiSiteName || "TalkAdvantage",
         systemProps: settings.systemProps,
         storageLocation: settings.storageLocation,
+        silenceDetection: settings.silenceDetection,
       })
 
       // Reset key status when opening modal
@@ -116,7 +134,6 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
     setKeyStatus("idle")
 
     try {
-      // Make a real API call to test the key
       const response = await fetch("/api/test-api-key", {
         method: "POST",
         headers: {
@@ -130,6 +147,7 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
       if (response.ok && data.valid) {
         setKeyStatus("valid")
         toast({
+          variant: "default",
           title: "API Key Valid",
           description: "Your AssemblyAI API key has been validated successfully.",
         })
@@ -168,6 +186,7 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
 
     try {
       toast({
+        variant: "default",
         title: "Testing OpenRouter Key",
         description: "Validating your OpenRouter API key...",
       })
@@ -177,6 +196,7 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
       setTimeout(() => {
         setIsTestingKey(false)
         toast({
+          variant: "default",
           title: "API Key Valid",
           description: "Your OpenRouter API key has been validated successfully.",
         })
@@ -205,68 +225,18 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
     settings.setAIModel(localSettings.aiModel)
     settings.setAIRefererURL(localSettings.aiRefererURL)
     settings.setAISiteName(localSettings.aiSiteName)
-
-    // System Props
-    settings.setCuriosityEngineEnabled(localSettings.systemProps.curiosityEngine.enabled)
-    settings.setCuriosityEngineQuestionCount(localSettings.systemProps.curiosityEngine.questionCount)
-    settings.setCuriosityEngineAllowedQuestionTypes(localSettings.systemProps.curiosityEngine.allowedQuestionTypes)
-    settings.setCuriosityEngineCustomizableGuidelines(localSettings.systemProps.curiosityEngine.customizableGuidelines)
-    settings.setCuriosityEngineAutoGenerateOnAnalysis(localSettings.systemProps.curiosityEngine.autoGenerateOnAnalysis)
-    settings.setConversationCompassEnabled(localSettings.systemProps.conversationCompass.enabled)
-    settings.setConversationCompassVisualizationType(localSettings.systemProps.conversationCompass.visualizationType)
-    settings.setConversationCompassAutoUpdateOnAnalysis(
-      localSettings.systemProps.conversationCompass.autoUpdateOnAnalysis,
-    )
-
-    // Guided Conversations
-    settings.setGuidedConversationsEnabled(localSettings.systemProps.conversationCompass.guidedConversations.enabled)
-    settings.setGuidedConversationsPredictionPrompt(
-      localSettings.systemProps.conversationCompass.guidedConversations.predictionPrompt,
-    )
-    settings.setGuidedConversationsGoalEvaluationPrompt(
-      localSettings.systemProps.conversationCompass.guidedConversations.goalEvaluationPrompt,
-    )
-    settings.setGuidedConversationsDefaultGoal(
-      localSettings.systemProps.conversationCompass.guidedConversations.defaultGoal,
-    )
-    settings.setGuidedConversationsMaxPredictions(
-      localSettings.systemProps.conversationCompass.guidedConversations.maxPredictions,
-    )
-
-    // Tracking Mode
-    settings.setTrackingModeEnabled(localSettings.systemProps.conversationCompass.trackingMode.enabled)
-    settings.setTrackingModeExpansionPrompt(localSettings.systemProps.conversationCompass.trackingMode.expansionPrompt)
-    settings.setTrackingModeTopicDriftThreshold(
-      localSettings.systemProps.conversationCompass.trackingMode.topicDriftThreshold,
-    )
-    settings.setTrackingModeSilenceTimeoutSeconds(
-      localSettings.systemProps.conversationCompass.trackingMode.silenceTimeoutSeconds,
-    )
-    settings.setTrackingModeMaxThoughtsHistory(
-      localSettings.systemProps.conversationCompass.trackingMode.maxThoughtsHistory,
-    )
-
     settings.setStorageLocation(localSettings.storageLocation as StorageLocationType)
     
-    // Save storage location to cookie for server components to access
-    document.cookie = `storageLocation=${localSettings.storageLocation}; path=/; max-age=31536000; SameSite=Strict`;
-
-    // Apply theme immediately
-    if (localSettings.theme !== "system") {
-      document.documentElement.classList.toggle("dark", localSettings.theme === "dark")
-    } else {
-      // Check system preference
-      const isDarkMode = window.matchMedia("(prefers-color-scheme: dark)").matches
-      document.documentElement.classList.toggle("dark", isDarkMode)
-    }
+    // Save silence detection settings
+    settings.setSilenceDetectionEnabled(localSettings.silenceDetection.enabled)
+    settings.setSilenceThresholdMinutes(localSettings.silenceDetection.thresholdMinutes)
+    settings.setSilenceAutoStopSeconds(localSettings.silenceDetection.autoStopSeconds)
 
     toast({
+      variant: "default",
       title: "Settings Saved",
-      description: "Your settings have been saved successfully.",
+      description: "Your settings have been updated successfully.",
     })
-
-    // Close the modal after saving
-    onOpenChange(false)
   }
 
   const resetSettings = () => {
@@ -289,9 +259,11 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
         aiSiteName: settings.aiSiteName || "TalkAdvantage",
         systemProps: settings.systemProps,
         storageLocation: settings.storageLocation,
+        silenceDetection: settings.silenceDetection,
       })
 
       toast({
+        variant: "default",
         title: "Settings Reset",
         description: "All settings have been reset to default values.",
       })
@@ -381,30 +353,30 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-4">
-          <TabsList className="grid grid-cols-6">
-            <TabsTrigger value="general" className="flex items-center gap-2">
-              <Sliders className="h-4 w-4" />
-              <span className="hidden sm:inline">General</span>
+          <TabsList className="grid w-full grid-cols-6">
+            <TabsTrigger value="general">
+              <Sliders className="h-4 w-4 mr-2" />
+              General
             </TabsTrigger>
-            <TabsTrigger value="api" className="flex items-center gap-2">
-              <Key className="h-4 w-4" />
-              <span className="hidden sm:inline">API Keys</span>
+            <TabsTrigger value="recording">
+              <Mic className="h-4 w-4 mr-2" />
+              Recording
             </TabsTrigger>
-            <TabsTrigger value="ai" className="flex items-center gap-2">
-              <BrainCircuit className="h-4 w-4" />
-              <span className="hidden sm:inline">AI Models</span>
+            <TabsTrigger value="api">
+              <Key className="h-4 w-4 mr-2" />
+              API Keys
             </TabsTrigger>
-            <TabsTrigger value="system" className="flex items-center gap-2">
-              <Settings2 className="h-4 w-4" />
-              <span className="hidden sm:inline">System Props</span>
+            <TabsTrigger value="ai">
+              <BrainCircuit className="h-4 w-4 mr-2" />
+              AI Settings
             </TabsTrigger>
-            <TabsTrigger value="account" className="flex items-center gap-2">
-              <User className="h-4 w-4" />
-              <span className="hidden sm:inline">Account</span>
+            <TabsTrigger value="storage">
+              <Database className="h-4 w-4 mr-2" />
+              Storage
             </TabsTrigger>
-            <TabsTrigger value="storage" className="flex items-center gap-2">
-              <Database className="h-4 w-4" />
-              <span className="hidden sm:inline">Storage</span>
+            <TabsTrigger value="system">
+              <Settings2 className="h-4 w-4 mr-2" />
+              System
             </TabsTrigger>
           </TabsList>
 
@@ -472,17 +444,15 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
                   </div>
                   <Select
                     value={localSettings.audioQuality}
-                    onValueChange={(value) =>
-                      setLocalSettings({ ...localSettings, audioQuality: value as AudioQualityOption })
-                    }
+                    onValueChange={(value) => setLocalSettings((prev) => ({ ...prev, audioQuality: value as AudioQualityOption }))}
                   >
-                    <SelectTrigger id="audio-quality" className="w-[180px]">
+                    <SelectTrigger>
                       <SelectValue placeholder="Select quality" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="low">Low (64 kbps)</SelectItem>
-                      <SelectItem value="medium">Medium (128 kbps)</SelectItem>
-                      <SelectItem value="high">High (256 kbps)</SelectItem>
+                      <SelectItem value="low">Low (Smaller file size)</SelectItem>
+                      <SelectItem value="medium">Medium (Balanced)</SelectItem>
+                      <SelectItem value="high">High (Best quality)</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -501,6 +471,142 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
                       step={1}
                       onValueChange={(value) => setLocalSettings({ ...localSettings, volume: value[0] })}
                     />
+                  </div>
+                </div>
+              </div>
+            </div>
+          </TabsContent>
+
+          {/* Recording Settings */}
+          <TabsContent value="recording" className="space-y-6">
+            <div>
+              <h3 className="text-lg font-medium">Recording Settings</h3>
+              <p className="text-sm text-muted-foreground">Configure your recording preferences and silence detection.</p>
+            </div>
+
+            <div className="space-y-4">
+              {/* Audio Quality Settings */}
+              <div>
+                <Label>Audio Quality</Label>
+                <Select
+                  value={localSettings.audioQuality}
+                  onValueChange={(value) =>
+                    setLocalSettings((prev) => ({ ...prev, audioQuality: value as AudioQualityOption }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select quality" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">Low (Smaller file size)</SelectItem>
+                    <SelectItem value="medium">Medium (Balanced)</SelectItem>
+                    <SelectItem value="high">High (Best quality)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Volume Settings */}
+              <div className="space-y-2">
+                <Label>Volume</Label>
+                <div className="flex items-center gap-4">
+                  <Volume2 className="h-4 w-4 text-muted-foreground" />
+                  <Slider
+                    value={[localSettings.volume]}
+                    onValueChange={(value) => setLocalSettings((prev) => ({ ...prev, volume: value[0] }))}
+                    max={100}
+                    step={1}
+                  />
+                  <span className="w-12 text-right text-sm">{localSettings.volume}%</span>
+                </div>
+              </div>
+
+              {/* Silence Detection Settings */}
+              <div className="space-y-4 pt-4 border-t">
+                <div className="flex items-center justify-between">
+                  <Label className="text-base">Silence Detection</Label>
+                  <Switch
+                    checked={localSettings.silenceDetection.enabled}
+                    onCheckedChange={(enabled) =>
+                      setLocalSettings((prev) => ({
+                        ...prev,
+                        silenceDetection: { ...prev.silenceDetection, enabled }
+                      }))
+                    }
+                  />
+                </div>
+
+                <div className="space-y-4 pl-4">
+                  <div className="space-y-2">
+                    <Label>Silence Threshold (minutes)</Label>
+                    <div className="flex items-center gap-4">
+                      <Input
+                        type="number"
+                        min={1}
+                        max={60}
+                        value={localSettings.silenceDetection.thresholdMinutes}
+                        onChange={(e) =>
+                          setLocalSettings((prev) => ({
+                            ...prev,
+                            silenceDetection: {
+                              ...prev.silenceDetection,
+                              thresholdMinutes: parseInt(e.target.value) || 1
+                            }
+                          }))
+                        }
+                        className="w-24"
+                      />
+                      <span className="text-sm text-muted-foreground">minutes before notification</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Auto-stop Timer (seconds)</Label>
+                    <div className="flex items-center gap-4">
+                      <Input
+                        type="number"
+                        min={10}
+                        max={120}
+                        value={localSettings.silenceDetection.autoStopSeconds}
+                        onChange={(e) =>
+                          setLocalSettings((prev) => ({
+                            ...prev,
+                            silenceDetection: {
+                              ...prev.silenceDetection,
+                              autoStopSeconds: parseInt(e.target.value) || 10
+                            }
+                          }))
+                        }
+                        className="w-24"
+                      />
+                      <span className="text-sm text-muted-foreground">seconds to wait before auto-stop</span>
+                    </div>
+                  </div>
+
+                  {/* Add Test Button */}
+                  <div className="pt-2">
+                    <Button 
+                      variant="outline" 
+                      onClick={() => {
+                        setSilenceAlertType('initial')
+                        setShowSilenceAlert(true)
+                        
+                        // Set timer for auto-stop
+                        const timer = setTimeout(() => {
+                          if (silenceAlertType === 'initial') {
+                            setSilenceAlertType('stopped')
+                          }
+                        }, localSettings.silenceDetection.autoStopSeconds * 1000)
+                        
+                        setAutoStopTimer(timer)
+                      }}
+                      className="w-full flex items-center justify-center gap-2"
+                    >
+                      <Mic className="h-4 w-4" />
+                      Test Silence Detection
+                    </Button>
+                    <p className="text-sm text-muted-foreground mt-2">
+                      Click to simulate the silence detection prompt that appears during recording.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -833,7 +939,6 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
                   <div className="space-y-2">
                     <Label htmlFor="question-count">Number of Questions</Label>
                     <Select
-                      id="question-count"
                       value={localSettings.systemProps.curiosityEngine.questionCount.toString()}
                       onValueChange={(value) => updateCuriosityEngineSettings("questionCount", Number.parseInt(value))}
                     >
@@ -973,19 +1078,16 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
                   <div className="space-y-2">
                     <Label htmlFor="visualization-type">Visualization Type</Label>
                     <Select
-                      id="visualization-type"
                       value={localSettings.systemProps.conversationCompass.visualizationType}
-                      onValueChange={(value) =>
-                        updateConversationCompassSettings("visualizationType", value as "tree" | "flow" | "network")
-                      }
+                      onValueChange={(value) => updateConversationCompassSettings("visualizationType", value)}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select type" />
+                        <SelectValue placeholder="Select visualization type" />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="tree">Tree View</SelectItem>
-                        <SelectItem value="flow">Flow Chart</SelectItem>
-                        <SelectItem value="network">Network Graph</SelectItem>
+                        <SelectItem value="flow">Flow View</SelectItem>
+                        <SelectItem value="network">Network View</SelectItem>
                       </SelectContent>
                     </Select>
                     <p className="text-sm text-muted-foreground">
@@ -1033,7 +1135,6 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
                   <div className="space-y-2">
                     <Label htmlFor="max-predictions">Maximum Predictions</Label>
                     <Select
-                      id="max-predictions"
                       value={localSettings.systemProps.conversationCompass.guidedConversations.maxPredictions.toString()}
                       onValueChange={(value) =>
                         updateGuidedConversationsSettings("maxPredictions", Number.parseInt(value))
@@ -1132,7 +1233,6 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
                   <div className="space-y-2">
                     <Label htmlFor="silence-timeout">Silence Timeout</Label>
                     <Select
-                      id="silence-timeout"
                       value={localSettings.systemProps.conversationCompass.trackingMode.silenceTimeoutSeconds.toString()}
                       onValueChange={(value) =>
                         updateTrackingModeSettings("silenceTimeoutSeconds", Number.parseInt(value))
@@ -1157,7 +1257,6 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
                   <div className="space-y-2">
                     <Label htmlFor="max-thoughts">Maximum Thoughts History</Label>
                     <Select
-                      id="max-thoughts"
                       value={localSettings.systemProps.conversationCompass.trackingMode.maxThoughtsHistory.toString()}
                       onValueChange={(value) =>
                         updateTrackingModeSettings("maxThoughtsHistory", Number.parseInt(value))
@@ -1330,6 +1429,35 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
             </Button>
           </div>
         </div>
+
+        {/* Silence Detection Alert Dialog */}
+        <SilenceAlertDialog
+          open={showSilenceAlert}
+          onOpenChange={(open) => {
+            setShowSilenceAlert(open)
+            if (!open && autoStopTimer) {
+              clearTimeout(autoStopTimer)
+              setAutoStopTimer(null)
+            }
+          }}
+          onContinue={() => {
+            if (autoStopTimer) {
+              clearTimeout(autoStopTimer)
+              setAutoStopTimer(null)
+            }
+            setSilenceAlertType('continued')
+          }}
+          onStop={() => {
+            if (autoStopTimer) {
+              clearTimeout(autoStopTimer)
+              setAutoStopTimer(null)
+            }
+            setSilenceAlertType('stopped')
+          }}
+          countdownSeconds={localSettings.silenceDetection.autoStopSeconds}
+          thresholdMinutes={localSettings.silenceDetection.thresholdMinutes}
+          type={silenceAlertType}
+        />
       </DialogContent>
     </Dialog>
   )

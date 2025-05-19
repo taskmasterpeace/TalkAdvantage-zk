@@ -38,6 +38,7 @@ export interface Database {
           updated_at: string
           is_processed: boolean
           is_public: boolean
+          tags: string | null
         }
         Insert: {
           id?: string
@@ -50,6 +51,7 @@ export interface Database {
           updated_at?: string
           is_processed?: boolean
           is_public?: boolean
+          tags?: string | null
         }
         Update: {
           id?: string
@@ -62,6 +64,7 @@ export interface Database {
           updated_at?: string
           is_processed?: boolean
           is_public?: boolean
+          tags?: string | null
         }
       }
       transcripts: {

@@ -25,6 +25,7 @@ export interface TranscriptionOptions {
   topicDetection: boolean
   summarization: boolean
   summaryType?: "bullets" | "paragraph" | "headline"
+  entityDetection: boolean
 }
 
 export interface UploadProgress {

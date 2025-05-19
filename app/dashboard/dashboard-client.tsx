@@ -112,9 +112,12 @@ export default function DashboardClient() {
                 </div>
               </TabsTrigger>
             </TabsList>
-            <TabsContent value="record" className="mt-0">
+
+            {/* Keep RecordingTab always mounted but hidden when not active */}
+            <div className={activeTab === "record" ? "" : "hidden"}>
               <RecordingTab />
-            </TabsContent>
+            </div>
+
             <TabsContent value="library" className="mt-0">
               <LibraryTab />
             </TabsContent>

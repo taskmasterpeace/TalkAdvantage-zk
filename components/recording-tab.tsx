@@ -38,6 +38,8 @@ import {
   Plus,
   Upload,
   DownloadIcon,
+  Circle,
+  Tag as TagIcon,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import AudioVisualizer from "./audio-visualizer"
@@ -52,9 +54,27 @@ import { ProfileEditorDialog } from "./profile-editor-dialog"
 import { AssemblyAI } from "assemblyai"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { unifiedRecordingsService } from "@/lib/recordings-service"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import SilenceAlertDialog from "./silence-alert-dialog"
 
 // Add a type for the recording state to improve type safety
 type RecordingState = "idle" | "recording" | "paused"
+
+// Add Tag types
+interface Tag {
+  id: string;
+  name: string;
+  color: string;
+}
+
+// Available tag colors
+const TAG_COLORS = [
+  { name: 'Red', value: 'red', class: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800' },
+  { name: 'Blue', value: 'blue', class: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800' },
+  { name: 'Green', value: 'green', class: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 border-green-200 dark:border-green-800' },
+  { name: 'Yellow', value: 'yellow', class: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400 border-yellow-200 dark:border-yellow-800' },
+  { name: 'Purple', value: 'purple', class: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 border-purple-200 dark:border-purple-800' },
+];
 
 // Replace the component function with a more organized version
 export default function RecordingTab() {
@@ -98,6 +118,23 @@ export default function RecordingTab() {
   const audioAnalyzerRef = useRef<AnalyserNode | null>(null)
   const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null)
   const [isConnecting, setIsConnecting] = useState(false)
+
+  // Add saving state
+  const [isSaving, setIsSaving] = useState(false)
+
+  // Add tag state
+  const [tags, setTags] = useState<Tag[]>([])
+  const [isTagEditorOpen, setIsTagEditorOpen] = useState(false)
+  const [newTagName, setNewTagName] = useState('')
+  const [selectedColor, setSelectedColor] = useState(TAG_COLORS[0].value)
+
+  // Add silence detection state
+  const [isSilencePromptOpen, setIsSilencePromptOpen] = useState(false)
+  const [silenceAutoStopTimer, setSilenceAutoStopTimer] = useState<NodeJS.Timeout | null>(null)
+  const [lastAudioLevel, setLastAudioLevel] = useState(0)
+
+  // Add countdown state
+  const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null)
 
   // Helper to convert Float32 samples to 16-bit PCM
   const floatTo16BitPCM = (input: Float32Array) => {
@@ -295,7 +332,200 @@ export default function RecordingTab() {
     }
   }, [handleError, toast, setIsConnecting, setIsTranscribing, setLiveText, setWordCount, sessionStore])
 
-  // Recording control functions
+  // Move handleSilenceDetection after stopRecording
+  const stopRecording = useCallback(() => {
+    if (recordingState === "idle") return
+
+    // Set saving state to true
+    setIsSaving(true)
+
+    // Stop media recorder
+    if (mediaRecorder) {
+      if (mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop()
+      }
+      setMediaRecorder(null)
+    }
+
+    // Show initial processing toast
+    toast({
+      title: "Processing Recording",
+      description: "Your recording is being processed. It will appear in your library in a few moments.",
+    })
+
+    // Disconnect and clean up
+    if (audioStreamRef.current) {
+      audioStreamRef.current.getTracks().forEach((track) => track.stop())
+      audioStreamRef.current = null
+    }
+    if (transcriberRef.current) {
+      transcriberRef.current.close().catch(console.error)
+      transcriberRef.current = null
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close()
+      audioCtxRef.current = null
+    }
+
+    // Cleanup Web Audio resources
+    if (audioWorkletNodeRef.current) {
+      audioWorkletNodeRef.current.port.close()
+      audioWorkletNodeRef.current.disconnect()
+      audioWorkletNodeRef.current = null
+    }
+    if (audioSourceRef.current) {
+      audioSourceRef.current.disconnect()
+      audioSourceRef.current = null
+    }
+    if (audioAnalyzerRef.current) {
+      audioAnalyzerRef.current.disconnect()
+      audioAnalyzerRef.current = null
+    }
+
+    // Create audio blob and save to session
+    if (audioChunks.length > 0) {
+      const audioBlob = new Blob(audioChunks, { type: "audio/webm" })
+      sessionStore.setAudioBlob(audioBlob)
+      
+      // Upload the recording to either local or cloud storage based on settings
+      if (audioBlob.size > 0) {
+        (async () => {
+          try {
+            const supabase = getSupabaseClient()
+            
+            // Get current user
+            const {
+              data: { user },
+            } = await supabase.auth.getUser()
+            
+            if (!user) {
+              setIsSaving(false)
+              toast({
+                variant: "destructive",
+                title: "Authentication Error",
+                description: "You must be logged in to save recordings",
+              })
+              return
+            }
+            
+            // Create a file object from the blob
+            const file = new File([audioBlob], `${sessionName.replace(/\s+/g, "-").toLowerCase()}.webm`, { 
+              type: "audio/webm"
+            })
+            
+            // Convert tags to JSON string
+            const tagsJSON = JSON.stringify(tags.map(tag => ({
+              id: tag.id,
+              name: tag.name,
+              color: tag.color
+            })))
+            
+            // Use our unified recording service which handles both local and cloud storage
+            const recording = await unifiedRecordingsService.createRecording(user.id, file, {
+              name: sessionName,
+              description: sessionName,
+              durationSeconds: recordingTime,
+              isPublic: false,
+              tags: tagsJSON // Add tags to the recording
+            })
+            
+            const isLocal = unifiedRecordingsService.isLocalStorage()
+            
+            // Show success toast with info about library availability
+            toast({
+              title: "Recording Saved Successfully",
+              description: "Your recording has been saved and will be available in your library shortly.",
+            })
+
+            // Show a follow-up toast after a short delay
+            setTimeout(() => {
+              toast({
+                title: "Recording Available",
+                description: "Your recording is now available in your library. Switch to the Library tab to view it.",
+              })
+            }, 3000)
+            
+          } catch (error) {
+            console.error("Error saving recording:", error)
+            toast({
+              variant: "destructive",
+              title: "Save Failed",
+              description: error instanceof Error ? error.message : "Failed to save recording",
+            })
+          } finally {
+            setIsSaving(false)
+          }
+        })()
+      } else {
+        setIsSaving(false)
+      }
+    } else {
+      setIsSaving(false)
+    }
+
+    // End current session
+    sessionStore.endCurrentSession()
+
+    setRecordingState("idle")
+    setIsTranscribing(false)
+    setTags([]) // Reset tags
+  }, [
+    recordingState,
+    mediaRecorder,
+    audioChunks,
+    sessionStore,
+    sessionName,
+    recordingTime,
+    toast,
+    handleError,
+    tags // Add tags dependency
+  ])
+
+  // Add silence detection function
+  const handleSilenceDetection = useCallback((audioLevel: number) => {
+    const SILENCE_THRESHOLD = 0.01; // Adjust this value based on testing
+    
+    if (audioLevel < SILENCE_THRESHOLD) {
+      if (!silenceStartTime) {
+        setSilenceStartTime(Date.now());
+      } else {
+        const silenceDuration = (Date.now() - silenceStartTime) / 1000 / 60; // Convert to minutes
+        if (silenceDuration >= settings.silenceDetection.thresholdMinutes && !isSilencePromptOpen && settings.silenceDetection.enabled) {
+          setIsSilencePromptOpen(true);
+          setCountdownSeconds(settings.silenceDetection.autoStopSeconds);
+          
+          // Start countdown timer
+          const countdownInterval = setInterval(() => {
+            setCountdownSeconds((prev) => {
+              if (prev === null || prev <= 1) {
+                clearInterval(countdownInterval);
+                return null;
+              }
+              return prev - 1;
+            });
+          }, 1000);
+
+          // Start auto-stop timer
+          const timer = setTimeout(() => {
+            stopRecording();
+            setIsSilencePromptOpen(false);
+            setCountdownSeconds(null);
+          }, settings.silenceDetection.autoStopSeconds * 1000);
+          setSilenceAutoStopTimer(timer);
+        }
+      }
+    } else {
+      // Reset silence detection when audio is detected
+      setSilenceStartTime(null);
+      if (silenceAutoStopTimer) {
+        clearTimeout(silenceAutoStopTimer);
+        setSilenceAutoStopTimer(null);
+      }
+      setCountdownSeconds(null);
+    }
+  }, [settings.silenceDetection.thresholdMinutes, settings.silenceDetection.autoStopSeconds, settings.silenceDetection.enabled, isSilencePromptOpen, silenceStartTime, stopRecording]);
+
+  // Modify the startRecording function to initialize audio analysis for silence detection
   const startRecording = useCallback(async () => {
     console.log("startRecording function called") // Log start of function
     let currentStep = "Checking mediaDevices support"
@@ -452,6 +682,20 @@ export default function RecordingTab() {
       // Set recording state *after* everything is initialized
       setRecordingState("recording")
 
+      // After setting up MediaRecorder and Web Audio pipeline, add silence detection
+      if (settings.silenceDetection.enabled) {
+        const dataArray = new Float32Array(analyser.frequencyBinCount);
+        const checkAudioLevel = () => {
+          if (recordingState === "recording") {
+            analyser.getFloatTimeDomainData(dataArray);
+            const audioLevel = Math.max(...dataArray.map(Math.abs));
+            handleSilenceDetection(audioLevel);
+            requestAnimationFrame(checkAudioLevel);
+          }
+        };
+        checkAudioLevel();
+      }
+
       console.log("startRecording finished successfully.")
     } catch (error) {
       console.error(`Error during startRecording at step: ${currentStep}`, error)
@@ -474,6 +718,8 @@ export default function RecordingTab() {
     handleError,
     floatTo16BitPCM,
     generateUniqueSessionName,
+    settings.silenceDetection.enabled,
+    handleSilenceDetection,
   ])
 
   const pauseRecording = useCallback(() => {
@@ -501,128 +747,6 @@ export default function RecordingTab() {
       description: "Your recording has been resumed.",
     })
   }, [mediaRecorder, toast])
-
-  const stopRecording = useCallback(() => {
-    if (recordingState === "idle") return
-
-    // Stop media recorder
-    if (mediaRecorder) {
-      if (mediaRecorder.state !== "inactive") {
-        mediaRecorder.stop()
-      }
-      setMediaRecorder(null)
-    }
-
-    // Disconnect and clean up
-    if (audioStreamRef.current) {
-      audioStreamRef.current.getTracks().forEach((track) => track.stop())
-      audioStreamRef.current = null
-    }
-    if (transcriberRef.current) {
-      transcriberRef.current.close().catch(console.error)
-      transcriberRef.current = null
-    }
-    if (audioCtxRef.current) {
-      audioCtxRef.current.close()
-      audioCtxRef.current = null
-    }
-
-    // Cleanup Web Audio resources
-    if (audioWorkletNodeRef.current) {
-      audioWorkletNodeRef.current.port.close()
-      audioWorkletNodeRef.current.disconnect()
-      audioWorkletNodeRef.current = null
-    }
-    if (audioSourceRef.current) {
-      audioSourceRef.current.disconnect()
-      audioSourceRef.current = null
-    }
-    if (audioAnalyzerRef.current) {
-      audioAnalyzerRef.current.disconnect()
-      audioAnalyzerRef.current = null
-    }
-
-    // Create audio blob and save to session
-    if (audioChunks.length > 0) {
-      const audioBlob = new Blob(audioChunks, { type: "audio/webm" })
-      sessionStore.setAudioBlob(audioBlob)
-      
-      // Upload the recording to either local or cloud storage based on settings
-      if (audioBlob.size > 0) {
-        (async () => {
-          try {
-            const supabase = getSupabaseClient()
-            
-            // Get current user
-            const {
-              data: { user },
-            } = await supabase.auth.getUser()
-            
-            if (!user) {
-              toast({
-                variant: "destructive",
-                title: "Authentication Error",
-                description: "You must be logged in to save recordings",
-              })
-              return
-            }
-            
-            // Create a file object from the blob
-            const file = new File([audioBlob], `${sessionName.replace(/\s+/g, "-").toLowerCase()}.webm`, { 
-              type: "audio/webm"
-            })
-            
-            // Use our unified recording service which handles both local and cloud storage
-            const recording = await unifiedRecordingsService.createRecording(user.id, file, {
-              name: sessionName,
-              description: sessionName,
-              durationSeconds: recordingTime,
-              isPublic: false,
-            })
-            
-            const isLocal = unifiedRecordingsService.isLocalStorage()
-            
-            toast({
-              title: isLocal 
-                ? "Recording Saved Locally" 
-                : "Recording Saved to Cloud",
-              description: isLocal
-                ? "Your recording has been saved to your local device in privacy mode."
-                : "Your recording has been uploaded and saved to your account.",
-            })
-            
-          } catch (error) {
-            console.error("Error saving recording:", error)
-            toast({
-              variant: "destructive",
-              title: "Save Failed",
-              description: error instanceof Error ? error.message : "Failed to save recording",
-            })
-          }
-        })()
-      }
-    }
-
-    // End current session
-    sessionStore.endCurrentSession()
-
-    setRecordingState("idle")
-    setIsTranscribing(false)
-
-    toast({
-      title: "Recording Stopped",
-      description: "Your recording has been stopped and saved.",
-    })
-  }, [
-    recordingState,
-    mediaRecorder,
-    audioChunks,
-    sessionStore,
-    sessionName,
-    recordingTime,
-    toast,
-    handleError,
-  ])
 
   const triggerManualAnalysis = useCallback(() => {
     if (!isRecording && !hasContent) return
@@ -1031,6 +1155,19 @@ export default function RecordingTab() {
 
   return (
     <div className="space-y-6">
+      {/* Show saving overlay when saving */}
+      {isSaving && (
+        <div className="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg flex flex-col items-center gap-4">
+            <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+            <div className="text-center">
+              <h3 className="font-semibold mb-1">Saving Recording</h3>
+              <p className="text-sm text-muted-foreground">Please wait while we process and save your recording...</p>
+            </div>
+          </div>
+        </div>
+      )}
+      
       {/* Top Section */}
       <div className="space-y-4">
         {/* Header Row */}
@@ -1080,7 +1217,7 @@ export default function RecordingTab() {
           </div>
 
           {/* Quick Actions */}
-          <div className="flex items-center gap-2">
+          {/* <div className="flex items-center gap-2">
             <Button variant="outline" size="sm" onClick={saveSession}>
               <Save className="h-4 w-4 mr-2" />
               Save Session
@@ -1089,7 +1226,7 @@ export default function RecordingTab() {
               <RefreshCw className="h-4 w-4 mr-2" />
               New Session
             </Button>
-          </div>
+          </div> */}
         </div>
 
         {/* Control Panels */}
@@ -1099,60 +1236,113 @@ export default function RecordingTab() {
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  {/* Record/Pause button */}
-                  <Button
-                    variant={isRecording ? "destructive" : "default"}
-                    size="icon"
-                    onClick={() => {
-                      console.log("Start Recording button clicked") // Log button click
-                      if (recordingState === "idle") {
-                        startRecording()
-                      } else if (recordingState === "recording") {
-                        pauseRecording()
-                      } else if (recordingState === "paused") {
-                        resumeRecording()
+                  {/* Record/Pause/Resume button */}
+                  <div className="relative">
+                    <Button
+                      variant={recordingState === "idle" ? "destructive" : recordingState === "recording" ? "default" : "default"}
+                      size="icon"
+                      onClick={() => {
+                        if (recordingState === "idle") {
+                          startRecording()
+                        } else if (recordingState === "recording") {
+                          pauseRecording()
+                        } else if (recordingState === "paused") {
+                          resumeRecording()
+                        }
+                      }}
+                      className={`h-10 w-10 rounded-full relative ${
+                        recordingState === "recording" ? "bg-green-500 hover:bg-green-600 text-white border-green-400" : ""
+                      }`}
+                      aria-label={
+                        recordingState === "idle" 
+                          ? "Start recording" 
+                          : recordingState === "recording" 
+                            ? "Pause recording" 
+                            : "Resume recording"
                       }
-                    }}
-                    className="h-10 w-10 rounded-full"
-                    aria-label={isRecording ? "Pause recording" : "Start recording"}
-                    disabled={isConnecting}
-                  >
-                    {isConnecting ? (
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                    ) : isRecording ? (
-                      <Pause className="h-5 w-5" />
-                    ) : (
-                      <Play className="h-5 w-5" />
+                      disabled={isConnecting}
+                    >
+                      {isConnecting ? (
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      ) : recordingState === "recording" ? (
+                        <Pause className="h-5 w-5" />
+                      ) : recordingState === "paused" ? (
+                        <Play className="h-5 w-5" />
+                      ) : (
+                        <Circle className="h-5 w-5 fill-current" />
+                      )}
+                    </Button>
+                    {/* Larger blinking red dot indicator */}
+                    {recordingState === "recording" && (
+                      <div className="absolute -top-2 -right-2 w-5 h-5">
+                        <div className="absolute w-full h-full rounded-full bg-red-500 animate-[pulse_1s_ease-in-out_infinite]" />
+                      </div>
                     )}
-                  </Button>
+                  </div>
 
-                  {/* Stop button */}
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    disabled={recordingState === "idle" || isConnecting}
-                    onClick={stopRecording}
-                    className="h-10 w-10 rounded-full"
-                    aria-label="Stop recording"
-                  >
-                    <Square className="h-5 w-5" />
-                  </Button>
+                  {/* Stop button - only show when recording or paused */}
+                  {(recordingState === "recording" || recordingState === "paused") && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={stopRecording}
+                      className="h-10 w-10 rounded-full border-red-200 hover:border-red-300 hover:bg-red-50"
+                      aria-label="Stop recording"
+                    >
+                      <Square className="h-5 w-5 text-red-500" />
+                    </Button>
+                  )}
 
                   {/* Mute button */}
                   <Button
                     variant="outline"
                     size="icon"
                     onClick={() => setIsMuted(!isMuted)}
-                    className={`h-10 w-10 rounded-full ${isMuted ? "bg-red-100 dark:bg-red-900/20 text-red-500 dark:text-red-400" : ""}`}
+                    className={`h-10 w-10 rounded-full ${
+                      isMuted 
+                        ? "bg-red-100 dark:bg-red-900/20 text-red-500 dark:text-red-400 border-red-200" 
+                        : ""
+                    }`}
                     aria-label={isMuted ? "Unmute microphone" : "Mute microphone"}
                     disabled={recordingState === "idle" || isConnecting}
                   >
                     {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
                   </Button>
+
+                  {/* Add Tag Button - New Position */}
+                  {(recordingState === "recording" || recordingState === "paused") && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => setIsTagEditorOpen(true)}
+                      className={`h-10 w-10 rounded-full ${tags.length > 0 ? "bg-blue-100 dark:bg-blue-900/20 border-blue-200" : ""}`}
+                      title={`Edit Tags (${tags.length} tags)`}
+                    >
+                      <div className="relative">
+                        <TagIcon className="h-5 w-5" />
+                        {tags.length > 0 && (
+                          <div className="absolute -top-2 -right-2 bg-primary text-primary-foreground rounded-full w-4 h-4 text-xs flex items-center justify-center">
+                            {tags.length}
+                          </div>
+                        )}
+                      </div>
+                    </Button>
+                  )}
                 </div>
 
-                {/* Recording timer */}
-                <div className="text-xl font-mono">{formatTime(recordingTime)}</div>
+                {/* Recording status indicator */}
+                <div className="flex items-center gap-2">
+                  {recordingState !== "idle" && (
+                    <span className={`text-sm ${
+                      recordingState === "recording" 
+                        ? "text-red-500" 
+                        : "text-yellow-500"
+                    }`}>
+                      {recordingState === "recording" ? "Recording" : "Paused"}
+                    </span>
+                  )}
+                  <div className="text-xl font-mono">{formatTime(recordingTime)}</div>
+                </div>
 
                 {/* Analysis timer */}
                 <div className="flex flex-col items-end">
@@ -1164,6 +1354,24 @@ export default function RecordingTab() {
                   <AudioVisualizer isActive={isRecording && !isMuted} />
                 </div>
               </div>
+
+              {/* Display current tags */}
+              {(recordingState === "recording" || recordingState === "paused") && tags.length > 0 && (
+                <div className="flex items-center gap-2 mt-2 flex-wrap">
+                  {tags.map(tag => (
+                    <div 
+                      key={tag.id}
+                      className={`px-2 py-1 rounded-full text-xs font-medium border flex items-center gap-1.5 ${TAG_COLORS.find(c => c.value === tag.color)?.class}`}
+                    >
+                      <span>{tag.name}</span>
+                      <X 
+                        className="h-3 w-3 opacity-50 cursor-pointer hover:opacity-100" 
+                        onClick={() => setTags(prev => prev.filter(t => t.id !== tag.id))}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
 
               {/* Analysis interval settings */}
               <div className="flex items-center justify-between mt-2">
@@ -1616,35 +1824,162 @@ export default function RecordingTab() {
         profileName={isCreatingNewProfile ? undefined : templateStore.activeTemplate}
         isCreatingNew={isCreatingNewProfile}
       />
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Button
-            variant={isRecording ? "destructive" : "default"}
-            size="icon"
-            onClick={() => {
-              console.log("Start Recording button clicked") // Log button click
-              if (recordingState === "idle") {
-                startRecording()
-              } else if (recordingState === "recording") {
-                pauseRecording()
-              } else if (recordingState === "paused") {
-                resumeRecording()
-              }
-            }}
-            className="h-10 w-10 rounded-full"
-            aria-label={isRecording ? "Pause recording" : "Start recording"}
-            disabled={isConnecting}
-          >
-            {isConnecting ? (
-              <Loader2 className="h-5 w-5 animate-spin" />
-            ) : isRecording ? (
-              <Pause className="h-5 w-5" />
-            ) : (
-              <Play className="h-5 w-5" />
-            )}
-          </Button>
-        </div>
-      </div>
+
+      {/* Tag Editor Dialog */}
+      <Dialog open={isTagEditorOpen} onOpenChange={setIsTagEditorOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-xl flex items-center gap-2">
+              <TagIcon className="h-5 w-5 text-primary" />
+              Edit Tags
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {/* Current Tags */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium">Current Tags ({tags.length})</label>
+                {tags.length > 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    Click on a tag to remove it
+                  </span>
+                )}
+              </div>
+              
+              {/* Group tags by color */}
+              {Object.entries(
+                tags.reduce((acc, tag) => {
+                  const colorGroup = acc[tag.color] || [];
+                  return {
+                    ...acc,
+                    [tag.color]: [...colorGroup, tag]
+                  };
+                }, {} as Record<string, Tag[]>)
+              ).map(([color, colorTags]) => (
+                <div key={color} className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${TAG_COLORS.find(c => c.value === color)?.class}`} />
+                    <span className="text-xs font-medium">{TAG_COLORS.find(c => c.value === color)?.name}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pl-4">
+                    {colorTags.map(tag => (
+                      <div 
+                        key={tag.id}
+                        className={`px-2 py-1 rounded-full text-xs font-medium border flex items-center gap-1.5 cursor-pointer hover:opacity-80 transition-opacity ${TAG_COLORS.find(c => c.value === color)?.class}`}
+                        onClick={() => setTags(prev => prev.filter(t => t.id !== tag.id))}
+                        title="Click to remove"
+                      >
+                        <span>{tag.name}</span>
+                        <TagIcon className="h-3 w-3 opacity-50" />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              
+              {tags.length === 0 && (
+                <div className="text-sm text-muted-foreground bg-muted/50 rounded-lg p-4 text-center">
+                  No tags added yet. Add your first tag below.
+                </div>
+              )}
+            </div>
+
+            {/* Add New Tag */}
+            <div className="space-y-2 pt-2 border-t">
+              <label className="text-sm font-medium">Add New Tag</label>
+              <div className="flex gap-2">
+                <Input
+                  value={newTagName}
+                  onChange={(e) => setNewTagName(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter' && newTagName.trim()) {
+                      e.preventDefault();
+                      setTags(prev => [...prev, {
+                        id: crypto.randomUUID(),
+                        name: newTagName.trim(),
+                        color: selectedColor
+                      }]);
+                      setNewTagName('');
+                    }
+                  }}
+                  placeholder="Enter tag name"
+                  className="flex-1"
+                />
+                <select
+                  value={selectedColor}
+                  onChange={(e) => setSelectedColor(e.target.value)}
+                  className="px-3 py-2 bg-white dark:bg-slate-900 border border-input rounded-md text-sm"
+                >
+                  {TAG_COLORS.map(color => (
+                    <option key={color.value} value={color.value}>
+                      {color.name}
+                    </option>
+                  ))}
+                </select>
+                <Button 
+                  onClick={() => {
+                    if (newTagName.trim()) {
+                      setTags(prev => [...prev, {
+                        id: crypto.randomUUID(),
+                        name: newTagName.trim(),
+                        color: selectedColor
+                      }]);
+                      setNewTagName('');
+                    }
+                  }}
+                  disabled={!newTagName.trim()}
+                  className="shrink-0"
+                >
+                  Add Tag
+                </Button>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsTagEditorOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Silence Detection Dialog */}
+      <SilenceAlertDialog
+        open={isSilencePromptOpen}
+        onOpenChange={(open) => {
+          setIsSilencePromptOpen(open);
+          if (!open) {
+            if (silenceAutoStopTimer) {
+              clearTimeout(silenceAutoStopTimer);
+              setSilenceAutoStopTimer(null);
+            }
+            setCountdownSeconds(null);
+          }
+        }}
+        onContinue={() => {
+          setSilenceStartTime(null);
+          setIsSilencePromptOpen(false);
+          if (silenceAutoStopTimer) {
+            clearTimeout(silenceAutoStopTimer);
+            setSilenceAutoStopTimer(null);
+          }
+          setCountdownSeconds(null);
+        }}
+        onStop={() => {
+          stopRecording();
+          setIsSilencePromptOpen(false);
+          if (silenceAutoStopTimer) {
+            clearTimeout(silenceAutoStopTimer);
+            setSilenceAutoStopTimer(null);
+          }
+          setCountdownSeconds(null);
+        }}
+        countdownSeconds={countdownSeconds}
+        thresholdMinutes={settings.silenceDetection.thresholdMinutes}
+        type={countdownSeconds === null ? 'stopped' : 'initial'}
+      />
     </div>
   )
 }
