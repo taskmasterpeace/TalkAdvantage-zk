@@ -38,15 +38,12 @@ function useDebounce<T>(value: T, delay: number): T {
 // Update the downloadTranscript function to handle unprocessed recordings
 const downloadTranscript = async (recordingId: string, recordingName: string) => {
   try {
-    // Check if we should use local storage (from cookies)
-    const cookieValue = document.cookie
-      .split('; ')
-      .find(row => row.startsWith('storageLocation='))
-      ?.split('=')[1];
-      
-    const storageLocation = cookieValue || 'cloud';
+    // Use storageLocation from settings store instead of cookies
+    const storageLocation = useSettingsStore.getState().storageLocation
+    console.log("downloadTranscript using storageLocation:", storageLocation);
     
     let transcriptText: string;
+    let summaryText: string | null = null;
     
     if (storageLocation === 'local') {
       console.log("Downloading local recording transcript", { recordingId });
@@ -55,6 +52,7 @@ const downloadTranscript = async (recordingId: string, recordingName: string) =>
         if (localRecording?.transcript) {
           console.log("Found local transcript for download");
           transcriptText = localRecording.transcript;
+          summaryText = localRecording.summary || null;
         } else {
           console.log("No local transcript found for download");
           alert("No transcript available. This recording may not have been processed yet.");
@@ -70,10 +68,10 @@ const downloadTranscript = async (recordingId: string, recordingName: string) =>
       console.log("Downloading cloud recording transcript", { recordingId });
       const supabase = getSupabaseClient()
       
-      // Get transcript
+      // Get transcript and summary
       const { data, error } = await supabase
         .from("transcripts")
-        .select("full_text")
+        .select("full_text, summary")
         .eq("recording_id", recordingId)
         .single()
       
@@ -84,16 +82,24 @@ const downloadTranscript = async (recordingId: string, recordingName: string) =>
       }
       
       transcriptText = data.full_text;
+      summaryText = data.summary;
     }
     
-    // Create a blob with the transcript text
-    const blob = new Blob([transcriptText], { type: 'text/plain' })
+    // Create a blob with the transcript text, including summary if available
+    let finalText = transcriptText;
+    if (summaryText) {
+      finalText = `SUMMARY:\n${summaryText}\n\nFULL TRANSCRIPT:\n${transcriptText}`;
+    }
+    
+    const blob = new Blob([finalText], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     
-    // Create download link and trigger click
-    const a = document.createElement("a")
+    // Create a temporary link element
+    const a = document.createElement('a')
     a.href = url
-    a.download = `${recordingName}-transcript.txt`
+    a.download = `${recordingName.replace(/[^\w\s-]/g, '')}_transcript.txt`
+    
+    // Trigger the download
     document.body.appendChild(a)
     a.click()
     
@@ -102,7 +108,7 @@ const downloadTranscript = async (recordingId: string, recordingName: string) =>
     URL.revokeObjectURL(url)
   } catch (error) {
     console.error("Error downloading transcript:", error)
-    alert("Error downloading transcript.")
+    alert("Failed to download transcript: " + String(error))
   }
 }
 
@@ -425,6 +431,16 @@ export default function LibraryTab() {
   // Add rename state
   const [showRenameDialog, setShowRenameDialog] = useState(false);
   const [recordingToRename, setRecordingToRename] = useState<Recording | null>(null);
+  // Add state for transcript summaries
+  const [transcriptSummaries, setTranscriptSummaries] = useState<Record<string, string | null>>({});
+  const [isFetchingSummary, setIsFetchingSummary] = useState<Record<string, boolean>>({});
+  // Add state for transcript metadata (duration, speakers, sentiment)
+  const [transcriptMetadata, setTranscriptMetadata] = useState<Record<string, {
+    duration?: string;
+    speakers?: number;
+    sentiment?: string;
+    meta?: any;
+  }>>({});
 
   // Use the tag management hook
   const { recordingTags, saveTags, loadTags } = useTagManagement();
@@ -432,6 +448,11 @@ export default function LibraryTab() {
   // Get storage location from settings store
   const storageLocation = useSettingsStore(state => state.storageLocation)
 
+  // Add search button state
+  const [searchProgress, setSearchProgress] = useState(0);
+  const [totalSearchItems, setTotalSearchItems] = useState(0);
+  const [isActiveSearch, setIsActiveSearch] = useState(false);
+  
   // Increase debounce time for better performance
   const debouncedSearchQuery = useDebounce(searchQuery, 500);
 
@@ -449,18 +470,57 @@ export default function LibraryTab() {
 
   // Add the copyAnalysisSummary function here, inside the component
   const copyAnalysisSummary = (recording: Recording) => {
-    const summary = `Deep Analysis Summary for ${formatRecordingName(recording)}
+    const metadata = transcriptMetadata[recording.id] || {
+      duration: formatDuration(recording.duration_seconds),
+      speakers: 2,
+      sentiment: "Positive"
+    };
+    
+    // Build a comprehensive summary with available metadata
+    let summaryText = `Deep Analysis Summary for ${formatRecordingName(recording)}\n\n`;
+    
+    // Basic info
+    summaryText += `Duration: ${metadata.duration}\n`;
+    summaryText += `Speakers: ${metadata.speakers} detected\n`;
+    summaryText += `Overall Sentiment: ${metadata.sentiment}\n\n`;
+    
+    // Show topics if available
+    if (metadata.meta?.topics) {
+      summaryText += "Topics Detected:\n";
+      Object.entries(metadata.meta.topics).slice(0, 6).forEach(([topic, relevance]) => {
+        summaryText += `• ${topic}\n`;
+      });
+      summaryText += "\n";
+    }
+    
+    // Key points
+    summaryText += "Key Points:\n";
+    if (transcriptSummaries[recording.id]) {
+      transcriptSummaries[recording.id]
+        ?.split('\n')
+        .filter(line => line.trim().length > 0)
+        .forEach(point => {
+          summaryText += `• ${point.trim().replace(/^[•-]\s*/, '')}\n`;
+        });
+    } else {
+      // Fallback points
+      summaryText += "• Discussion about project timeline\n";
+      summaryText += "• Budget considerations\n";
+      summaryText += "• Team resource allocation\n";
+    }
+    
+    // Processing details
+    if (metadata.meta) {
+      summaryText += "\nProcessing Details:\n";
+      if (metadata.meta.speaker_labels) summaryText += "✓ Speaker Detection\n";
+      if (metadata.meta.timestamps) summaryText += "✓ Timestamps\n";
+      if (metadata.meta.sentiment_analysis) summaryText += "✓ Sentiment Analysis\n";
+      if (metadata.meta.topic_detection) summaryText += "✓ Topic Detection\n";
+      if (metadata.meta.entity_detection) summaryText += "✓ Entity Detection\n";
+      if (metadata.meta.summarization) summaryText += `✓ Summary (${metadata.meta.summary_type || "bullets"})\n`;
+    }
 
-Duration: ${formatDuration(recording.duration_seconds)}
-Speakers: 2 detected
-Overall Sentiment: Positive
-
-Key Points:
-• Discussion about project timeline
-• Budget considerations
-• Team resource allocation`;
-
-    navigator.clipboard.writeText(summary)
+    navigator.clipboard.writeText(summaryText)
       .then(() => {
         // You could add a toast notification here if you have one
         console.log('Analysis summary copied to clipboard');
@@ -737,28 +797,22 @@ Key Points:
       }
 
       // Finally check search
-      if (searchType === "transcript") {
-        return debouncedSearchQuery.trim() === "" || Boolean(transcriptSearchResults[recording.id]);
-      } else if (searchType === "tags") {
-        if (!debouncedSearchQuery.trim()) return true;
-        const recordingTagList = recordingTags[recording.id] || [];
-        return recordingTagList.some(tag => 
-          tag.name.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
-        );
+      if (searchQuery.trim()) {
+        // For all search types, check if this recording is in the search results
+        return Boolean(transcriptSearchResults[recording.id]);
       }
-      return performBasicSearch(recording, debouncedSearchQuery);
+      
+      // If no search query, show all recordings
+      return true;
     });
   }, [
     recordings,
     isDateInRange,
     isDurationInRange,
-    searchType,
-    debouncedSearchQuery,
+    searchQuery,
     transcriptSearchResults,
     recordingTags,
-    performBasicSearch,
-    activeTagFilters,
-    selectedRecordings // Add this dependency
+    activeTagFilters
   ]);
 
   // Update filteredDateRecordings similarly
@@ -788,16 +842,13 @@ Key Points:
       }
 
       // Then check search
-      if (searchType === "transcript") {
-        return debouncedSearchQuery.trim() === "" || Boolean(transcriptSearchResults[recording.id]);
-      } else if (searchType === "tags") {
-        if (!debouncedSearchQuery.trim()) return true;
-        const recordingTagList = recordingTags[recording.id] || [];
-        return recordingTagList.some(tag => 
-          tag.name.toLowerCase().includes(debouncedSearchQuery.toLowerCase())
-        );
+      if (searchQuery.trim()) {
+        // For all search types, check if this recording is in the search results
+        return Boolean(transcriptSearchResults[recording.id]);
       }
-      return performBasicSearch(recording, debouncedSearchQuery);
+      
+      // If no search query, show all recordings
+      return true;
     });
   }, [
     selectedHourRecordings,
@@ -806,11 +857,9 @@ Key Points:
     currentWeekRecordings,
     selectedDate,
     isDurationInRange,
-    searchType,
-    debouncedSearchQuery,
+    searchQuery,
     transcriptSearchResults,
     recordingTags,
-    performBasicSearch,
     activeTagFilters,
     getRecordingsForDate
   ]);
@@ -989,105 +1038,7 @@ Key Points:
     });
   }
 
-  // Optimize transcript search to use cache and avoid repeated API calls
-  const searchInTranscripts = useCallback(async (query: string) => {
-    if (!query.trim()) {
-      setTranscriptSearchResults({});
-      return;
-    }
-
-    setIsSearchingTranscripts(true);
-    const results: Record<string, boolean> = {};
-    
-    try {
-      // Search in loaded transcript previews first
-      Object.entries(transcriptPreviews).forEach(([recordingId, transcript]) => {
-        if (transcript.toLowerCase().includes(query.toLowerCase())) {
-          results[recordingId] = true;
-        }
-      });
-
-      // Update results immediately with what we have
-      setTranscriptSearchResults(results);
-
-      // Get unloaded recordings that aren't in cache
-      const unloadedRecordings = recordings.filter(
-        rec => rec.is_processed && 
-        !transcriptPreviews[rec.id] && 
-        !transcriptSearchCache[rec.id]
-      );
-
-      // Process in batches to avoid overwhelming the API
-      const batchSize = 5;
-      for (let i = 0; i < unloadedRecordings.length; i += batchSize) {
-        const batch = unloadedRecordings.slice(i, i + batchSize);
-        await Promise.all(batch.map(async (recording) => {
-          try {
-            if (storageLocation === "local") {
-              const localRecording = await indexedDBService.getRecording(recording.id);
-              const transcript = localRecording?.transcript || "";
-              
-              // Update cache and check search
-              setTranscriptSearchCache(prev => ({
-                ...prev,
-                [recording.id]: transcript
-              }));
-              
-              if (transcript.toLowerCase().includes(query.toLowerCase())) {
-                results[recording.id] = true;
-              }
-              
-              // Update preview
-              setTranscriptPreviews(prev => ({
-                ...prev,
-                [recording.id]: transcript
-              }));
-            } else {
-              // For cloud recordings
-              const supabase = getSupabaseClient();
-              const { data, error } = await supabase
-                .from("transcripts")
-                .select("full_text")
-                .eq("recording_id", recording.id)
-                .single();
-
-              const transcript = (!error && data?.full_text) ? data.full_text : "";
-              
-              // Update cache and check search
-              setTranscriptSearchCache(prev => ({
-                ...prev,
-                [recording.id]: transcript
-              }));
-              
-              if (transcript.toLowerCase().includes(query.toLowerCase())) {
-                results[recording.id] = true;
-              }
-              
-              // Update preview
-              setTranscriptPreviews(prev => ({
-                ...prev,
-                [recording.id]: transcript
-              }));
-            }
-          } catch (error) {
-            console.error("Error searching transcript:", error);
-            // Set empty string for failed fetches to avoid retrying
-            setTranscriptSearchCache(prev => ({
-              ...prev,
-              [recording.id]: ""
-            }));
-          }
-        }));
-        
-        // Update results after each batch
-        setTranscriptSearchResults({...results});
-      }
-    } finally {
-      setIsSearchingTranscripts(false);
-    }
-  }, [recordings, transcriptPreviews, transcriptSearchCache, storageLocation]);
-
-  // Add tag search functionality
+  // Add tag search functionality - no longer used automatically
   const searchInTags = useCallback((query: string) => {
     if (searchType !== "tags" || !query.trim()) return;
 
@@ -1099,15 +1050,195 @@ Key Points:
     });
     setTranscriptSearchResults(results);
   }, [searchType, recordingTags]);
+  
+  // Perform manual search with progress tracking for all search types
+  const handleSearch = useCallback(async () => {
+    if (!searchQuery.trim()) return;
+    
+    setIsActiveSearch(true);
+    setSearchProgress(0);
+    
+    try {
+      // For transcript search, we need to fetch transcripts
+      if (searchType === "transcript") {
+        setIsSearchingTranscripts(true);
+        const results: Record<string, boolean> = {};
+        
+        // First check already loaded transcripts
+        Object.entries(transcriptPreviews).forEach(([recordingId, transcript]) => {
+          if (transcript.toLowerCase().includes(searchQuery.toLowerCase())) {
+            results[recordingId] = true;
+          }
+        });
 
-  // Update search effect to include tag search
-  useEffect(() => {
-    if (searchType === "transcript") {
-      searchInTranscripts(debouncedSearchQuery);
-    } else if (searchType === "tags") {
-      searchInTags(debouncedSearchQuery);
+        // Update results immediately with what we have
+        setTranscriptSearchResults(results);
+        
+        // Then get recordings that need transcript fetching
+        const unloadedRecordings = recordings.filter(
+          rec => rec.is_processed && 
+          !transcriptPreviews[rec.id] && 
+          !transcriptSearchCache[rec.id]
+        );
+        
+        setTotalSearchItems(unloadedRecordings.length);
+        let processedItems = 0;
+        
+        // Process in batches to avoid overwhelming the API
+        const batchSize = 5;
+        for (let i = 0; i < unloadedRecordings.length; i += batchSize) {
+          const batch = unloadedRecordings.slice(i, i + batchSize);
+          await Promise.all(batch.map(async (recording) => {
+            try {
+              if (storageLocation === "local") {
+                const localRecording = await indexedDBService.getRecording(recording.id);
+                const transcript = localRecording?.transcript || "";
+                
+                // Update cache and check search
+                setTranscriptSearchCache(prev => ({
+                  ...prev,
+                  [recording.id]: transcript
+                }));
+                
+                if (transcript.toLowerCase().includes(searchQuery.toLowerCase())) {
+                  results[recording.id] = true;
+                }
+                
+                // Update preview
+                setTranscriptPreviews(prev => ({
+                  ...prev,
+                  [recording.id]: transcript
+                }));
+              } else {
+                // For cloud recordings
+                const supabase = getSupabaseClient();
+                const { data, error } = await supabase
+                  .from("transcripts")
+                  .select("full_text")
+                  .eq("recording_id", recording.id)
+                  .single();
+                
+                const transcript = (!error && data?.full_text) ? data.full_text : "";
+                
+                // Update cache and check search
+                setTranscriptSearchCache(prev => ({
+                  ...prev,
+                  [recording.id]: transcript
+                }));
+                
+                if (transcript.toLowerCase().includes(searchQuery.toLowerCase())) {
+                  results[recording.id] = true;
+                }
+                
+                // Update preview
+                setTranscriptPreviews(prev => ({
+                  ...prev,
+                  [recording.id]: transcript
+                }));
+              }
+            } catch (error) {
+              console.error("Error searching transcript:", error);
+              setTranscriptSearchCache(prev => ({
+                ...prev,
+                [recording.id]: ""
+              }));
+            } finally {
+              // Update progress
+              processedItems++;
+              const progressPercent = Math.round((processedItems / unloadedRecordings.length) * 100);
+              setSearchProgress(progressPercent);
+            }
+          }));
+          
+          // Update results after each batch
+          setTranscriptSearchResults({...results});
+        }
+      } else if (searchType === "tags") {
+        // Process tag search with progress tracking
+        const results: Record<string, boolean> = {};
+        const totalTags = Object.keys(recordingTags).length;
+        setTotalSearchItems(totalTags);
+        
+        let processedItems = 0;
+        
+        // Process in batches for smoother UI
+        const batchSize = 50;
+        const allEntries = Object.entries(recordingTags);
+        
+        for (let i = 0; i < allEntries.length; i += batchSize) {
+          const batch = allEntries.slice(i, i + batchSize);
+          
+          batch.forEach(([recordingId, tags]) => {
+            if (tags.some(tag => tag.name.toLowerCase().includes(searchQuery.toLowerCase()))) {
+              results[recordingId] = true;
+            }
+            
+            processedItems++;
+            const progressPercent = Math.round((processedItems / totalTags) * 100);
+            setSearchProgress(progressPercent);
+          });
+          
+          // Update results and yield to UI
+          setTranscriptSearchResults({...results});
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+      } else {
+        // For filename and other searches with progress tracking
+        const results: Record<string, boolean> = {};
+        setTotalSearchItems(recordings.length);
+        
+        let processedItems = 0;
+        
+        // Process in batches for smoother UI
+        const batchSize = 50;
+        for (let i = 0; i < recordings.length; i += batchSize) {
+          const batch = recordings.slice(i, i + batchSize);
+          
+          batch.forEach(recording => {
+            if (performBasicSearch(recording, searchQuery)) {
+              results[recording.id] = true;
+            }
+            
+            processedItems++;
+            const progressPercent = Math.round((processedItems / recordings.length) * 100);
+            setSearchProgress(progressPercent);
+          });
+          
+          // Update results and yield to UI
+          setTranscriptSearchResults({...results});
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+      }
+      
+      // Ensure progress reaches 100% at the end
+      setSearchProgress(100);
+    } finally {
+      setIsSearchingTranscripts(false);
+      // Reset active search after a delay to show completion
+      setTimeout(() => {
+        setIsActiveSearch(false);
+        setSearchProgress(0);
+      }, 500);
     }
-  }, [debouncedSearchQuery, searchType, searchInTranscripts, searchInTags]);
+  }, [
+    searchQuery, 
+    searchType, 
+    recordings, 
+    transcriptPreviews, 
+    transcriptSearchCache, 
+    storageLocation, 
+    performBasicSearch, 
+    recordingTags
+  ]);
+  
+  // Update search effect - only clear results when query is empty
+  useEffect(() => {
+    // Clear results when search query is empty
+    if (!searchQuery.trim()) {
+      setTranscriptSearchResults({});
+    }
+    // No longer perform live search for any search type
+  }, [searchQuery]);
 
   // Add function to get all unique tags
   const getAllUniqueTags = useMemo(() => {
@@ -1310,17 +1441,18 @@ Key Points:
   // Update the viewTranscript function to handle unprocessed recordings better
   const viewTranscript = async (recording: Recording) => {
     try {
-      setIsLoadingTranscript(true)
-      setCurrentTranscriptTitle(recording.name)
-      setShowTranscriptDialog(true)
+      // Set loading state and open dialog first
+      setIsLoadingTranscript(true);
+      setCurrentTranscriptTitle(recording.name);
       
-      // Check if we should use local storage (from cookies)
-      const cookieValue = document.cookie
-        .split('; ')
-        .find(row => row.startsWith('storageLocation='))
-        ?.split('=')[1];
-        
-      const storageLocation = cookieValue || 'cloud';
+      // Ensure dialog is open with a slight delay to avoid animation conflicts
+     
+        setShowTranscriptDialog(true);
+  
+      
+      // Use storageLocation from settings store instead of cookies
+      const storageLocation = useSettingsStore.getState().storageLocation
+      console.log("viewTranscript using storageLocation:", storageLocation);
       
       if (storageLocation === 'local') {
         console.log("Fetching local recording transcript", { recordingId: recording.id });
@@ -1328,7 +1460,50 @@ Key Points:
           const localRecording = await indexedDBService.getRecording(recording.id);
           if (localRecording && localRecording.transcript) {
             console.log("Found local transcript, length:", localRecording.transcript.length);
-            setCurrentTranscript(localRecording.transcript);
+            
+            let displayText = "";
+            
+            // 1. Add summary if available
+            if (localRecording.summary) {
+              displayText += `SUMMARY: ${localRecording.summary}\n\n`;
+            }
+            
+            // 2. Extract metadata
+            try {
+              let metaData = null;
+              if (localRecording.meta) {
+                metaData = JSON.parse(localRecording.meta);
+              }
+              
+              // Add basic info
+              displayText += `Duration: ${formatDuration(localRecording.durationSeconds)}\n`;
+              displayText += `Speakers: ${localRecording.speakers || "Unknown"}\n`;
+              displayText += `Overall Sentiment: ${localRecording.sentiment || "Neutral"}\n`;
+              
+              // Add topics if available
+              if (metaData && metaData.topics) {
+                displayText += `Topics: ${Object.keys(metaData.topics).slice(0, 5).join(", ")}\n`;
+              }
+              
+              // Add entities if available
+              if (metaData && metaData.entities) {
+                displayText += `Entities: ${Object.keys(metaData.entities).slice(0, 5).join(", ")}\n`;
+              }
+              
+              // Add sentiment analysis if available in meta
+              if (metaData && metaData.sentiment_analysis) {
+                displayText += `Sentiment Analysis: Enabled\n`;
+              }
+              
+              displayText += "\n";
+            } catch (error) {
+              console.error("Error parsing metadata:", error);
+            }
+            
+            // 3. Add full transcript
+            displayText += `FULL TRANSCRIPT: ${localRecording.transcript}`;
+            
+            setCurrentTranscript(displayText);
           } else {
             console.log("No local transcript found");
             setCurrentTranscript("No transcript found. This recording may not have been processed yet.");
@@ -1342,10 +1517,10 @@ Key Points:
         console.log("Fetching cloud recording transcript", { recordingId: recording.id });
         const supabase = getSupabaseClient()
         
-        // Get transcript
+        // Get transcript, summary, and metadata
         const { data, error } = await supabase
           .from("transcripts")
-          .select("full_text")
+          .select("full_text, summary, speakers, overall_sentiment, meta")
           .eq("recording_id", recording.id)
           .single()
         
@@ -1355,7 +1530,49 @@ Key Points:
           return
         }
         
-        setCurrentTranscript(data?.full_text || "No transcript text available.")
+        let displayText = "";
+        
+        // 1. Add summary if available
+        if (data.summary) {
+          displayText += `SUMMARY: ${data.summary}\n\n`;
+        }
+        
+        // 2. Extract metadata
+        try {
+          let metaData = null;
+          if (data.meta) {
+            metaData = typeof data.meta === 'string' ? JSON.parse(data.meta) : data.meta;
+          }
+          
+          // Add basic info
+          displayText += `Duration: ${formatDuration(recording.duration_seconds)}\n`;
+          displayText += `Speakers: ${data.speakers || "Unknown"}\n`;
+          displayText += `Overall Sentiment: ${data.overall_sentiment || "Neutral"}\n`;
+          
+          // Add topics if available
+          if (metaData && metaData.topics) {
+            displayText += `Topics: ${Object.keys(metaData.topics).slice(0, 5).join(", ")}\n`;
+          }
+          
+          // Add entities if available
+          if (metaData && metaData.entities) {
+            displayText += `Entities: ${Object.keys(metaData.entities).slice(0, 5).join(", ")}\n`;
+          }
+          
+          // Add sentiment analysis if available in meta
+          if (metaData && metaData.sentiment_analysis) {
+            displayText += `Sentiment Analysis: Enabled\n`;
+          }
+          
+          displayText += "\n";
+        } catch (error) {
+          console.error("Error parsing metadata:", error);
+        }
+        
+        // 3. Add full transcript
+        displayText += `FULL TRANSCRIPT: ${data.full_text || "No transcript text available."}`;
+        
+        setCurrentTranscript(displayText);
       }
     } catch (error) {
       console.error("Error viewing transcript:", error)
@@ -1370,18 +1587,15 @@ Key Points:
     try {
       if (transcriptPreviews[recordingId]) return;
       
-      const cookieValue = document.cookie
-        .split('; ')
-        .find(row => row.startsWith('storageLocation='))
-        ?.split('=')[1];
-        
-      const storageLocation = cookieValue || 'cloud';
+      // Use storageLocation from settings store instead of cookies
+      const storageLocation = useSettingsStore.getState().storageLocation
+      console.log("fetchTranscriptPreview using storageLocation:", storageLocation);
       
       if (storageLocation === 'local') {
         try {
           const localRecording = await indexedDBService.getRecording(recordingId);
-          setTranscriptPreviews(prev => ({
-            ...prev,
+            setTranscriptPreviews(prev => ({
+              ...prev,
             [recordingId]: localRecording?.transcript || "No transcript available."
           }));
         } catch (error) {
@@ -1418,6 +1632,114 @@ Key Points:
       setTranscriptPreviews(prev => ({
         ...prev,
         [recordingId]: "Error loading transcript."
+      }));
+    }
+  };
+  
+  // Function to fetch transcript summary
+  const fetchTranscriptSummary = async (recordingId: string) => {
+    try {
+      // Set loading state
+      setIsFetchingSummary(prev => ({
+        ...prev,
+        [recordingId]: true
+      }));
+      
+      // Use storageLocation from settings store instead of cookies
+      const storageLocation = useSettingsStore.getState().storageLocation
+      console.log("fetchTranscriptSummary using storageLocation:", storageLocation);
+      
+      if (storageLocation === 'local') {
+        try {
+          const localRecording = await indexedDBService.getRecording(recordingId);
+          setTranscriptSummaries(prev => ({
+            ...prev,
+            [recordingId]: localRecording?.summary || null
+          }));
+          
+          // Parse meta data if available
+          let metaData = null;
+          if (localRecording?.meta) {
+            try {
+              metaData = JSON.parse(localRecording.meta);
+            } catch (error) {
+              console.error("Error parsing meta data:", error);
+            }
+          }
+          
+          // Set metadata for local recordings - use actual values if available
+          setTranscriptMetadata(prev => ({
+            ...prev,
+            [recordingId]: {
+              duration: formatDuration(localRecording?.durationSeconds || 0),
+              speakers: localRecording?.speakers || 2,
+              sentiment: localRecording?.sentiment || "Positive",
+              meta: metaData
+            }
+          }));
+        } catch (error) {
+          console.error("Error accessing IndexedDB for summary:", error);
+          setTranscriptSummaries(prev => ({
+            ...prev,
+            [recordingId]: null
+          }));
+        }
+      } else {
+        const supabase = getSupabaseClient();
+        const { data, error } = await supabase
+          .from("transcripts")
+          .select("summary, speakers, overall_sentiment, meta")
+          .eq("recording_id", recordingId)
+          .single();
+        
+        if (error || !data) {
+          console.error("Error fetching transcript summary:", error);
+          setTranscriptSummaries(prev => ({
+            ...prev,
+            [recordingId]: null
+          }));
+          return;
+        }
+        
+        setTranscriptSummaries(prev => ({
+          ...prev,
+          [recordingId]: data.summary
+        }));
+        
+        // Get recording for duration
+        const recording = recordings.find(r => r.id === recordingId);
+        
+        // Parse meta data if available
+        let metaData = null;
+        if (data.meta) {
+          try {
+            metaData = JSON.parse(data.meta);
+          } catch (error) {
+            console.error("Error parsing meta data:", error);
+          }
+        }
+        
+        // Set metadata from Supabase and recording
+        setTranscriptMetadata(prev => ({
+          ...prev,
+          [recordingId]: {
+            duration: recording ? formatDuration(recording.duration_seconds) : "0:00",
+            speakers: data.speakers || 2,
+            sentiment: data.overall_sentiment || "Positive",
+            meta: metaData
+          }
+        }));
+      }
+    } catch (error) {
+      console.error("Error fetching transcript summary:", error);
+      setTranscriptSummaries(prev => ({
+        ...prev,
+        [recordingId]: null
+      }));
+    } finally {
+      setIsFetchingSummary(prev => ({
+        ...prev,
+        [recordingId]: false
       }));
     }
   };
@@ -1459,7 +1781,14 @@ Key Points:
     };
     
     const handleViewTranscript = () => {
-      viewTranscript(recording);
+      // Close the options dialog first
+      setShowTranscriptDialog(false); // Reset transcript dialog state
+      
+      // Use a longer timeout to ensure the first dialog is fully closed
+      // before opening the transcript view
+    
+        viewTranscript(recording);
+  
     };
     
     const handleDownloadTranscript = () => {
@@ -1537,14 +1866,16 @@ Key Points:
           </div>
   
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              className="flex-1 justify-start"
-              onClick={handleViewTranscript}
-            >
-              <FileText className="mr-2 h-4 w-4" />
-              View Transcript
-            </Button>
+            <DialogClose asChild>
+              <Button
+                variant="outline"
+                className="flex-1 justify-start"
+                onClick={handleViewTranscript}
+              >
+                <FileText className="mr-2 h-4 w-4" />
+                View Transcript
+              </Button>
+            </DialogClose>
             <Button
               variant="outline"
               className="flex-1 justify-start"
@@ -1722,6 +2053,15 @@ Key Points:
         ...prev,
         [recordingId]: !prev[recordingId]
       };
+      
+      // If expanding and it's processed, fetch the summary
+      if (newState[recordingId]) {
+        const recording = recordings.find(r => r.id === recordingId);
+        if (recording?.is_processed) {
+          fetchTranscriptSummary(recordingId);
+        }
+      }
+      
       return newState;
     });
   };
@@ -1930,7 +2270,7 @@ Key Points:
           </Dialog>
 
           <Link 
-            href={`/dashboard/recordings/${recording.id}`} 
+            href={`/dashboard/recordings/${recording.id}?mode=${storageLocation}`} 
             className="text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800/30 p-0.5 rounded-sm flex items-center justify-center h-4 w-4 flex-shrink-0"
             onClick={(e) => {
               e.stopPropagation()
@@ -1940,7 +2280,13 @@ Key Points:
             <ExternalLink className="h-3 w-3" />
           </Link>
           
-          <Dialog>
+          <Dialog onOpenChange={(open) => {
+            // When the dialog is closed, we can ensure there are no conflicts
+            if (!open) {
+              // If we were going to view transcript, allow time for dialog to close
+           
+            }
+          }}>
             <DialogTrigger asChild>
               <Button
                 variant="ghost"
@@ -1986,7 +2332,7 @@ Key Points:
             <div className="flex flex-col items-center justify-center py-2">
               <p className="text-sm text-blue-700 dark:text-blue-300 mb-2">Start Deep Analysis</p>
               <Link
-                href={`/dashboard/recordings/${recording.id}`}
+                href={`/dashboard/recordings/${recording.id}?mode=${storageLocation}`}
                 className="flex items-center gap-2 bg-blue-100 dark:bg-blue-800 hover:bg-blue-200 dark:hover:bg-blue-700 text-blue-700 dark:text-blue-200 px-3 py-1.5 rounded-md text-sm font-medium transition-colors"
                 onClick={(e) => e.stopPropagation()}
               >
@@ -2008,8 +2354,9 @@ Key Points:
                     className="h-6 w-6 p-0"
                     onClick={(e) => {
                       e.stopPropagation();
-                      // Add refresh logic here
+                      fetchTranscriptSummary(recording.id);
                     }}
+                    title="Refresh summary"
                   >
                     <RefreshCw className="h-3.5 w-3.5 text-blue-600" />
                   </Button>
@@ -2028,36 +2375,137 @@ Key Points:
                 </div>
               </div>
               
-              {/* Mock summary content for processed recordings */}
-              <div className="text-sm space-y-1.5">
-                <p className="text-blue-700 dark:text-blue-300">
-                  <span className="font-medium">Duration:</span> {formatDuration(recording.duration_seconds)}
-                </p>
-                <p className="text-blue-700 dark:text-blue-300">
-                  <span className="font-medium">Speakers:</span> 2 detected
-                </p>
-                <p className="text-blue-700 dark:text-blue-300">
-                  <span className="font-medium">Overall Sentiment:</span> Positive
-                </p>
-                <p className="text-blue-700 dark:text-blue-300">
-                  <span className="font-medium">Key Points:</span>
-                </p>
-                <ul className="list-disc list-inside text-blue-600 dark:text-blue-400 pl-2">
-                  <li>Discussion about project timeline</li>
-                  <li>Budget considerations</li>
-                  <li>Team resource allocation</li>
-                </ul>
-                <div className="pt-2">
-                  <Link
-                    href={`/dashboard/recordings/${recording.id}`}
-                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                    View Full Analysis
-                  </Link>
+              {/* Display summary content */}
+              {isFetchingSummary[recording.id] ? (
+                <div className="flex items-center justify-center py-4">
+                  <div className="animate-spin h-4 w-4 border-2 border-blue-500 rounded-full border-t-transparent"></div>
+                  <span className="ml-2 text-sm text-blue-600 dark:text-blue-400">Loading summary...</span>
                 </div>
-              </div>
+              ) : transcriptSummaries[recording.id] ? (
+                <div className="text-sm space-y-1.5">
+                  <p className="text-blue-700 dark:text-blue-300">
+                    <span className="font-medium">Duration:</span> {transcriptMetadata[recording.id]?.duration || formatDuration(recording.duration_seconds)}
+                  </p>
+                  <p className="text-blue-700 dark:text-blue-300">
+                    <span className="font-medium">Speakers:</span> {transcriptMetadata[recording.id]?.speakers || 2} detected
+                  </p>
+                  <p className="text-blue-700 dark:text-blue-300">
+                    <span className="font-medium">Overall Sentiment:</span> {transcriptMetadata[recording.id]?.sentiment || "Positive"}
+                  </p>
+                  
+                  {/* Show topics if available in meta */}
+                  {transcriptMetadata[recording.id]?.meta?.topics && (
+                    <div>
+                      <p className="text-blue-700 dark:text-blue-300 font-medium mt-2">
+                        Topics Detected:
+                      </p>
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {Object.entries(transcriptMetadata[recording.id].meta.topics)
+                          .slice(0, 4)
+                          .map(([topic, relevance], idx) => (
+                            <span key={idx} className="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400 rounded-full text-xs">
+                              {topic}
+                            </span>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  <p className="text-blue-700 dark:text-blue-300 mt-2">
+                    <span className="font-medium">Key Points:</span>
+                  </p>
+                  <ul className="list-disc list-inside text-blue-600 dark:text-blue-400 pl-2">
+                    {transcriptSummaries[recording.id]
+                      ?.split('\n')
+                      .filter(line => line.trim().length > 0)
+                      .map((point, idx) => (
+                        <li key={idx}>{point.trim().replace(/^[•-]\s*/, '')}</li>
+                      ))}
+                  </ul>
+                  
+                  {/* Show processing details if available */}
+                  {transcriptMetadata[recording.id]?.meta && (
+                    <div className="mt-3 pt-2 border-t border-blue-200 dark:border-blue-800">
+                      <p className="text-blue-700 dark:text-blue-300 font-medium mb-1">
+                        Processing Details:
+                      </p>
+                      <div className="grid grid-cols-2 gap-1">
+                        {transcriptMetadata[recording.id].meta.speaker_labels && (
+                          <p className="text-xs text-blue-600 dark:text-blue-400">
+                            ✓ Speaker Detection
+                          </p>
+                        )}
+                        {transcriptMetadata[recording.id].meta.timestamps && (
+                          <p className="text-xs text-blue-600 dark:text-blue-400">
+                            ✓ Timestamps
+                          </p>
+                        )}
+                        {transcriptMetadata[recording.id].meta.sentiment_analysis && (
+                          <p className="text-xs text-blue-600 dark:text-blue-400">
+                            ✓ Sentiment Analysis
+                          </p>
+                        )}
+                        {transcriptMetadata[recording.id].meta.topic_detection && (
+                          <p className="text-xs text-blue-600 dark:text-blue-400">
+                            ✓ Topic Detection
+                          </p>
+                        )}
+                        {transcriptMetadata[recording.id].meta.entity_detection && (
+                          <p className="text-xs text-blue-600 dark:text-blue-400">
+                            ✓ Entity Detection
+                          </p>
+                        )}
+                        {transcriptMetadata[recording.id].meta.summarization && (
+                          <p className="text-xs text-blue-600 dark:text-blue-400">
+                            ✓ Summary ({transcriptMetadata[recording.id].meta.summary_type || "bullets"})
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  
+                  <div className="pt-2">
+                    <Link
+                      href={`/dashboard/recordings/${recording.id}?mode=${storageLocation}`}
+                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      View Full Analysis
+                    </Link>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm space-y-1.5">
+                  <p className="text-blue-700 dark:text-blue-300">
+                    <span className="font-medium">Duration:</span> {formatDuration(recording.duration_seconds)}
+                  </p>
+                  <p className="text-blue-700 dark:text-blue-300">
+                    <span className="font-medium">Speakers:</span> 2 detected
+                  </p>
+                  <p className="text-blue-700 dark:text-blue-300">
+                    <span className="font-medium">Overall Sentiment:</span> Positive
+                  </p>
+                  <p className="text-blue-700 dark:text-blue-300">
+                    <span className="font-medium">Key Points:</span>
+                  </p>
+                  <ul className="list-disc list-inside text-blue-600 dark:text-blue-400 pl-2">
+                    <li>Discussion about project timeline</li>
+                    <li>Budget considerations</li>
+                    <li>Team resource allocation</li>
+                  </ul>
+                  <div className="pt-2">
+                    <Link
+                      href={`/dashboard/recordings/${recording.id}?mode=${storageLocation}`}
+                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      View Full Analysis
+                    </Link>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -2068,19 +2516,78 @@ Key Points:
   // Add loading indicator to search bar
   const renderSearchBar = () => (
     <div className="relative flex-1">
-      <Search className="absolute left-2.5 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
-      <Input 
-        placeholder={`Search ${searchType === "filename" ? "file names" : 
-          searchType === "transcript" ? "transcript contents" :
-          searchType === "tags" ? "tags" : "interactions"}...`}
-        className="pl-8 h-7 text-xs bg-white dark:bg-slate-900 border-blue-200 dark:border-blue-800" 
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-      />
-      {isSearchingTranscripts && searchType === "transcript" && (
-        <div className="absolute right-2.5 top-1.5 flex items-center gap-1.5">
-          <div className="animate-spin h-3.5 w-3.5 border-2 border-primary rounded-full border-t-transparent"></div>
-          <span className="text-xs text-muted-foreground">Searching transcripts...</span>
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-2.5 top-1.5 h-3.5 w-3.5 text-muted-foreground" />
+          <Input 
+            placeholder={`Search ${searchType === "filename" ? "file names" : 
+              searchType === "transcript" ? "transcript contents" :
+              searchType === "tags" ? "tags" : "interactions"}...`}
+            className="pl-8 h-7 text-xs bg-white dark:bg-slate-900 border-blue-200 dark:border-blue-800" 
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                handleSearch();
+              }
+            }}
+          />
+          {isSearchingTranscripts && searchType === "transcript" && !isActiveSearch && (
+            <div className="absolute right-2.5 top-1.5 flex items-center gap-1.5">
+              <div className="animate-spin h-3.5 w-3.5 border-2 border-primary rounded-full border-t-transparent"></div>
+              <span className="text-xs text-muted-foreground">Searching...</span>
+            </div>
+          )}
+        </div>
+        
+        {/* Add search button for all search types */}
+        <Button 
+          size="sm"
+          className="h-7 bg-blue-500 hover:bg-blue-600"
+          disabled={!searchQuery.trim() || isSearchingTranscripts || isActiveSearch}
+          onClick={handleSearch}
+        >
+          {isActiveSearch ? (
+            <div className="flex items-center gap-1.5">
+              <div className="animate-spin h-3.5 w-3.5 border-2 border-white rounded-full border-t-transparent"></div>
+              <span>Searching...</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1">
+              <Search className="h-3.5 w-3.5 mr-1" />
+              <span>Search</span>
+            </div>
+          )}
+        </Button>
+      </div>
+      
+      {/* Add progress bar for search */}
+      {isActiveSearch && (
+        <div className="mt-1.5 w-full">
+          <div className="h-1 w-full bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+            <div 
+              className="h-full bg-blue-500 transition-all duration-300 ease-in-out"
+              style={{ width: `${searchProgress}%` }}
+            />
+          </div>
+          <div className="flex justify-between mt-0.5">
+            <span className="text-xs text-muted-foreground">
+              Searching {searchType === "transcript" ? "transcripts" : 
+                searchType === "tags" ? "tags" : 
+                searchType === "filename" ? "filenames" : "interactions"}...
+            </span>
+            <span className="text-xs text-muted-foreground">{searchProgress}% complete</span>
+          </div>
+        </div>
+      )}
+      
+      {/* Add help text for search */}
+      {!isActiveSearch && searchQuery.trim() && (
+        <div className="mt-1">
+          <p className="text-xs text-blue-500 dark:text-blue-400">
+            Press Enter or click Search to search
+          </p>
         </div>
       )}
     </div>
@@ -2954,7 +3461,19 @@ Key Points:
       </div>
 
       {/* Transcript Dialog */}
-      <Dialog open={showTranscriptDialog} onOpenChange={setShowTranscriptDialog}>
+      <Dialog 
+        open={showTranscriptDialog} 
+        onOpenChange={(open) => {
+          setShowTranscriptDialog(open);
+          if (!open) {
+            // Clear transcript state when dialog closes
+           
+              setCurrentTranscript(null);
+              setCurrentTranscriptTitle("");
+      
+          }
+        }}
+      >
         <DialogContent className="max-w-4xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -2986,12 +3505,38 @@ Key Points:
                 </div>
               </div>
             ) : (
-              <div className="prose prose-sm dark:prose-invert max-w-none">
-                <div className="space-y-2">
-                  {currentTranscript?.split('\n').map((paragraph, idx) => (
-                    <p key={idx}>{paragraph}</p>
-                  ))}
-                </div>
+              <div className="prose prose-sm dark:prose-invert max-w-none p-2">
+                {currentTranscript?.split('\n').map((line, idx) => {
+                  // Apply special formatting to section headers
+                  if (line.startsWith('SUMMARY:')) {
+                    return (
+                      <h3 key={idx} className="text-lg font-semibold text-emerald-600 dark:text-emerald-400 border-b border-emerald-200 dark:border-emerald-800 pb-2 mb-3">
+                        {line}
+                      </h3>
+                    );
+                  } else if (line.startsWith('FULL TRANSCRIPT:')) {
+                    return (
+                      <h3 key={idx} className="text-lg font-semibold text-purple-600 dark:text-purple-400 border-b border-purple-200 dark:border-purple-800 pb-2 mb-3 mt-6">
+                        {line}
+                      </h3>
+                    );
+                  } else if (line.startsWith('Duration:') || line.startsWith('Speakers:') || line.startsWith('Overall Sentiment:') || line.startsWith('Topics:') || line.startsWith('Entities:')) {
+                    // Format metadata lines
+                    const [label, value] = line.split(':', 2);
+                    return (
+                      <div key={idx} className="flex items-start mb-1">
+                        <span className="font-medium text-blue-600 dark:text-blue-400 mr-2 min-w-[100px]">{label}:</span>
+                        <span className="text-slate-700 dark:text-slate-300">{value}</span>
+                      </div>
+                    );
+                  } else if (line.trim() === '') {
+                    // Empty line
+                    return <div key={idx} className="h-2"></div>;
+                  } else {
+                    // Regular transcript text
+                    return <p key={idx} className="my-1">{line}</p>;
+                  }
+                })}
               </div>
             )}
           </ScrollArea>

@@ -134,7 +134,13 @@ export default function TranscriptionProcessor({
       formData.append("sentimentAnalysis", enableSentimentAnalysis.toString())
       formData.append("topicDetection", enableTopicDetection.toString())
       formData.append("summarization", enableSummarization.toString())
-      // formData.append("summaryType", summaryType)
+      
+      // Add summary model and type when summarization is enabled
+      if (enableSummarization) {
+        formData.append("summaryType", summaryType)
+        formData.append("summaryModel", "conversational") // Always set summary_model to "conversational"
+      }
+      
       formData.append("recordingId", recordingId)
       formData.append("isLocal", isLocal.toString())
 
@@ -168,7 +174,10 @@ export default function TranscriptionProcessor({
           const updatedRecording = await indexedDBService.addTranscriptToRecording(
             recordingId,
             data.transcript,
-            data.summary
+            data.summary,
+            data.speaker_count,
+            data.overall_sentiment,
+            data.meta ? JSON.stringify(data.meta) : null
           );
           
           if (updatedRecording) {

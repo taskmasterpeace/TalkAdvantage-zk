@@ -14,6 +14,7 @@ export async function POST(request: NextRequest) {
     const summarization = formData.get("summarization") === "true"
     const entityDetection = formData.get("entityDetection") === "true"
     const summaryType = formData.get("summaryType") as "bullets" | "paragraph" | "headline" | undefined
+    const summaryModel = formData.get("summaryModel") as string | undefined
     const isLocal = formData.get("isLocal") === "true"
 
     if (!file && !audioUrl) {
@@ -84,7 +85,8 @@ export async function POST(request: NextRequest) {
       summaryType,
       webhookUrl,
       entityDetection,
-    })
+      summaryModel,
+    } as any)
 
     if (!transcriptionResult.success) {
       return NextResponse.json({ error: transcriptionResult.error || "Transcription failed" }, { status: 500 })
@@ -95,6 +97,45 @@ export async function POST(request: NextRequest) {
     if (transcriptionResult.words && transcriptionResult.words.length > 0) {
       const lastWord = transcriptionResult.words[transcriptionResult.words.length - 1]
       durationSeconds = Math.ceil(lastWord.end / 1000) // Convert ms to seconds
+    }
+
+    // Extract number of speakers if available
+    let speakerCount = 1
+    if (speakerLabels && transcriptionResult.utterances && transcriptionResult.utterances.length > 0) {
+      // Get unique speaker IDs from utterances
+      const speakerIds = new Set()
+      transcriptionResult.utterances.forEach(utterance => {
+        if (utterance.speaker) {
+          speakerIds.add(utterance.speaker)
+        }
+      })
+      speakerCount = speakerIds.size || 1 // Default to 1 if no speakers detected
+    }
+
+    // Determine overall sentiment if sentiment analysis was enabled
+    let overallSentiment = null
+    if (sentimentAnalysis && transcriptionResult.sentiment && transcriptionResult.sentiment.length > 0) {
+      // Calculate the most frequent sentiment
+      const sentimentCounts = {
+        "POSITIVE": 0,
+        "NEUTRAL": 0,
+        "NEGATIVE": 0
+      }
+      
+      transcriptionResult.sentiment.forEach(item => {
+        if (item.sentiment && sentimentCounts.hasOwnProperty(item.sentiment)) {
+          sentimentCounts[item.sentiment]++
+        }
+      })
+      
+      // Find the most common sentiment
+      let maxCount = 0
+      Object.entries(sentimentCounts).forEach(([sentiment, count]) => {
+        if (count > maxCount) {
+          maxCount = count
+          overallSentiment = sentiment.charAt(0) + sentiment.slice(1).toLowerCase() // Format as "Positive", "Neutral", etc.
+        }
+      })
     }
 
     // If we have a recording ID, update the recording in Supabase
@@ -116,6 +157,23 @@ export async function POST(request: NextRequest) {
         await supabase.from("transcripts").insert({
           recording_id: recordingId,
           full_text: transcriptionResult.transcript,
+          summary: transcriptionResult.summary || null,
+          speakers: speakerCount,
+          overall_sentiment: overallSentiment,
+          meta: JSON.stringify({
+            speaker_labels: speakerLabels,
+            timestamps: timestamps,
+            sentiment_analysis: sentimentAnalysis,
+            topic_detection: topicDetection,
+            summarization: summarization,
+            summary_type: summaryType,
+            summary_model: summaryModel,
+            entity_detection: entityDetection,
+            speaker_count: speakerCount,
+            overall_sentiment: overallSentiment,
+            topics: transcriptionResult.topics || null,
+            entities: transcriptionResult.entities || null,
+          })
         })
       }
     }
@@ -131,6 +189,22 @@ export async function POST(request: NextRequest) {
       summary: transcriptionResult.summary,
       entities: transcriptionResult.entities,
       duration_seconds: durationSeconds,
+      speaker_count: speakerCount,
+      overall_sentiment: overallSentiment,
+      meta: {
+        speaker_labels: speakerLabels,
+        timestamps: timestamps,
+        sentiment_analysis: sentimentAnalysis,
+        topic_detection: topicDetection,
+        summarization: summarization,
+        summary_type: summaryType,
+        summary_model: summaryModel,
+        entity_detection: entityDetection,
+        speaker_count: speakerCount,
+        overall_sentiment: overallSentiment,
+        topics: transcriptionResult.topics || null,
+        entities: transcriptionResult.entities || null,
+      }
     })
   } catch (error) {
     console.error("Error in transcribe API route:", error)
