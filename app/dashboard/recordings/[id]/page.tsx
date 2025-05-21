@@ -9,16 +9,22 @@ import { getSupabaseServerClient } from "@/lib/supabase"
 interface PageProps {
   params: {
     id: string
+  },
+  searchParams: {
+    mode?: string
   }
 }
 
-export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
+export async function generateMetadata({ params, searchParams }: PageProps): Promise<Metadata> {
   // Ensure we're using fully resolved params object
   const id = params.id
   
+  // Check if mode is specified in the URL
+  const modeParam = searchParams.mode
+  
   // Get the storage location from the cookie
   const cookieValue = cookies().get("storageLocation")?.value
-  const storageLocation = cookieValue || "cloud"
+  const storageLocation = modeParam || cookieValue || "cloud"
 
   if (storageLocation === "local") {
     return {
@@ -36,13 +42,16 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   }
 }
 
-export default async function RecordingPage({ params }: PageProps) {
+export default async function RecordingPage({ params, searchParams }: PageProps) {
   // Ensure we're using fully resolved params object
   const id = params.id
   
+  // Check if mode is specified in the URL
+  const modeParam = searchParams.mode
+  
   // Get the storage location from the cookie
   const cookieValue = cookies().get("storageLocation")?.value
-  const storageLocation = cookieValue || "cloud"
+  const storageLocation = modeParam || cookieValue || "cloud"
 
   // Handle local storage
   if (storageLocation === "local") {

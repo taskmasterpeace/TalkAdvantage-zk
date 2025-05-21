@@ -7,6 +7,7 @@ interface TranscriptionOptions {
   topicDetection?: boolean
   summarization?: boolean
   summaryType?: "bullets" | "paragraph" | "headline"
+  summaryModel?: "informative" | "conversational"
 }
 
 interface TranscriptionResult {

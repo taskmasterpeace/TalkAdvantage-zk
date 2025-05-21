@@ -25,6 +25,7 @@ export async function transcribeAudioFromUrl(
     topicDetection?: boolean
     summarization?: boolean
     summaryType?: "bullets" | "paragraph" | "headline"
+    summaryModel?: "informative" | "conversational"
     webhookUrl?: string
     entityDetection?: boolean
   },
@@ -46,6 +47,7 @@ export async function transcribeAudioFromUrl(
       iab_categories: options.topicDetection,
       summarization: options.summarization,
       summary_type: options.summaryType,
+      summary_model: options.summaryModel,
       webhook_url: options.webhookUrl,
       entity_detection: options.entityDetection,
     })

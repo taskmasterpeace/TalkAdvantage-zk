@@ -26,6 +26,13 @@ interface SettingsState {
     autoStopSeconds: number
   }
 
+  // Widget Settings
+  enableDragDrop: boolean
+  widgetPositions: Record<string, { x: number, y: number }>
+  widgetSizes: Record<string, { width: number, height: number }>
+  minimizedWidgets: string[]
+  maximizedWidget: string | null
+
   // API Keys
   assemblyAIKey: string
   openRouterKey: string
@@ -115,6 +122,17 @@ interface SettingsState {
   setSilenceThresholdMinutes: (minutes: number) => void
   setSilenceAutoStopSeconds: (seconds: number) => void
 
+  // Widget Methods
+  setEnableDragDrop: (enabled: boolean) => void
+  setWidgetPositions: (positions: Record<string, { x: number, y: number }>) => void
+  setWidgetPosition: (widgetId: string, position: { x: number, y: number }) => void
+  setWidgetSizes: (sizes: Record<string, { width: number, height: number }>) => void
+  setWidgetSize: (widgetId: string, size: { width: number, height: number }) => void
+  setMinimizedWidgets: (widgets: string[]) => void
+  setMaximizedWidget: (widget: string | null) => void
+  resetWidgetPositions: () => void
+  toggleMinimizeWidget: (widgetId: string) => void
+
   resetSettings: () => void
 }
 
@@ -123,6 +141,21 @@ const defaultSettings = {
   autoSave: true,
   audioQuality: "high" as AudioQualityOption,
   volume: 80,
+
+  // Widget Settings
+  enableDragDrop: true,
+  widgetPositions: {},
+  widgetSizes: {},
+  minimizedWidgets: [
+    "ai-insights", 
+    "bookmarks", 
+    "audio-controls", 
+    "analysis-settings", 
+    "tags", 
+    "conversation-compass-widget", 
+    "curiosity-engine-widget"
+  ],
+  maximizedWidget: null,
 
   // Default Silence Detection Settings
   silenceDetection: {
@@ -508,6 +541,55 @@ export const useSettingsStore = create<SettingsState>()(
           }
         })),
 
+      // Widget Methods
+      setEnableDragDrop: (enabled) => set({ enableDragDrop: enabled }),
+      setWidgetPositions: (positions) => set({ widgetPositions: positions }),
+      setWidgetPosition: (widgetId, position) => set((state) => ({
+        widgetPositions: {
+          ...state.widgetPositions,
+          [widgetId]: position,
+        },
+      })),
+      setWidgetSizes: (sizes) => set({ widgetSizes: sizes }),
+      setWidgetSize: (widgetId, size) => set((state) => ({
+        widgetSizes: {
+          ...state.widgetSizes,
+          [widgetId]: size,
+        },
+      })),
+      setMinimizedWidgets: (widgets) => set({ minimizedWidgets: widgets }),
+      toggleMinimizeWidget: (widgetId) => set((state) => {
+        // Never allow live-text widget to be minimized
+        if (widgetId === "live-text") {
+          // Remove it from minimized if it's somehow there
+          return {
+            minimizedWidgets: state.minimizedWidgets.filter((id) => id !== widgetId)
+          };
+        }
+        
+        // Normal behavior for other widgets
+        return {
+          minimizedWidgets: state.minimizedWidgets.includes(widgetId)
+            ? state.minimizedWidgets.filter((id) => id !== widgetId)
+            : [...state.minimizedWidgets, widgetId],
+        };
+      }),
+      setMaximizedWidget: (widget) => set({ maximizedWidget: widget }),
+      resetWidgetPositions: () => set({ 
+        widgetPositions: {},
+        widgetSizes: {},
+        minimizedWidgets: [
+          "ai-insights", 
+          "bookmarks", 
+          "audio-controls", 
+          "analysis-settings", 
+          "tags", 
+          "conversation-compass-widget", 
+          "curiosity-engine-widget"
+        ],
+        maximizedWidget: null,
+      }),
+
       resetSettings: () => set(defaultSettings),
     }),
     {
@@ -527,6 +609,11 @@ export const useSettingsStore = create<SettingsState>()(
         systemProps: state.systemProps,
         storageLocation: state.storageLocation,
         silenceDetection: state.silenceDetection,
+        enableDragDrop: state.enableDragDrop,
+        widgetPositions: state.widgetPositions,
+        widgetSizes: state.widgetSizes,
+        minimizedWidgets: state.minimizedWidgets,
+        maximizedWidget: state.maximizedWidget,
       }),
     },
   ),

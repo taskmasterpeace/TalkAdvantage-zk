@@ -8,6 +8,7 @@ import { parseISO, getHours, getDay, format, addWeeks, subWeeks, getMonth } from
 import { FileAudio, Clock, ChevronLeft, ChevronRight } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { getWeekNumber, getWeekDateRange, getCurrentWeek } from "@/lib/date-utils"
 
 interface RecordingHeatmapProps {
   recordings: Array<{
@@ -43,33 +44,6 @@ export function RecordingHeatmap({
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
 
-  // Get week date range for display
-  const getWeekDateRange = useMemo(() => (weekNumber: number) => {
-    const currentDate = new Date();
-    const currentYear = currentDate.getFullYear();
-    const firstDayOfYear = new Date(currentYear, 0, 1);
-    
-    // Get the first day of the week (Sunday)
-    const daysOffset = firstDayOfYear.getDay();
-    const firstSundayOfYear = new Date(firstDayOfYear);
-    if (daysOffset > 0) {
-      firstSundayOfYear.setDate(firstDayOfYear.getDate() + (7 - daysOffset));
-    }
-    
-    // Get the start date for the week
-    const startOfWeek = new Date(firstSundayOfYear);
-    startOfWeek.setDate(firstSundayOfYear.getDate() + (weekNumber - 1) * 7);
-    
-    const endOfWeek = new Date(startOfWeek);
-    endOfWeek.setDate(startOfWeek.getDate() + 6);
-    
-    return { 
-      start: startOfWeek, 
-      end: endOfWeek,
-      formatted: `${format(startOfWeek, 'MMM d')} - ${format(endOfWeek, 'MMM d, yyyy')}`
-    };
-  }, []); // Empty dependency array since this calculation doesn't depend on any props/state
-  
   // Get recordings for current week
   const weekRecordings = useMemo(() => {
     const { start, end } = getWeekDateRange(currentWeek);
@@ -84,8 +58,10 @@ export function RecordingHeatmap({
 
   // Check if a given week is the current week
   const isCurrentWeek = (weekNumber: number) => {
-    const { start, end } = getWeekDateRange(weekNumber);
     const today = new Date();
+    const { start, end } = getWeekDateRange(weekNumber);
+    start.setHours(0, 0, 0, 0);
+    end.setHours(23, 59, 59, 999);
     return today >= start && today <= end;
   };
 

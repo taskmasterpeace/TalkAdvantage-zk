@@ -40,6 +40,8 @@ import {
   DownloadIcon,
   Circle,
   Tag as TagIcon,
+  Maximize2,
+  Move,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import AudioVisualizer from "./audio-visualizer"
@@ -56,6 +58,8 @@ import { getSupabaseClient } from "@/lib/supabase/client"
 import { unifiedRecordingsService } from "@/lib/recordings-service"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import SilenceAlertDialog from "./silence-alert-dialog"
+import DraggableWidget from "./draggable-widget"
+import { Tag } from "@/components/ui/tag"
 
 // Add a type for the recording state to improve type safety
 type RecordingState = "idle" | "recording" | "paused"
@@ -136,6 +140,30 @@ export default function RecordingTab() {
   // Add countdown state
   const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null)
 
+  // Add state to track first-time user experience
+  const [showWidgetHint, setShowWidgetHint] = useState(true)
+
+  // Function to reset all widgets
+  const resetAllWidgets = useCallback(() => {
+    // Only reset if drag and drop is enabled
+    if (!settings.enableDragDrop) return;
+    
+    settings.resetWidgetPositions();
+    
+    // Ensure the Live Text widget is visible after reset
+    const liveTextWidgetId = "live-text";
+    if (settings.minimizedWidgets.includes(liveTextWidgetId)) {
+      settings.toggleMinimizeWidget(liveTextWidgetId);
+    }
+    
+    toast({
+      title: "Layout Reset",
+      description: "All widgets have been reset to their default positions and minimized.",
+    });
+    // Show the widget hint again after reset
+    setShowWidgetHint(true);
+  }, [settings, toast]);
+
   // Helper to convert Float32 samples to 16-bit PCM
   const floatTo16BitPCM = (input: Float32Array) => {
     const output = new Int16Array(input.length)
@@ -183,6 +211,24 @@ export default function RecordingTab() {
     templateStore.loadDefaultTemplates()
   }, [])
 
+  // Ensure Live Text is always visible
+  useEffect(() => {
+    if (settings.enableDragDrop) {
+      const liveTextWidgetId = "live-text";
+      
+      // Make sure the widget is not minimized on initial load
+      if (settings.minimizedWidgets.includes(liveTextWidgetId)) {
+        settings.toggleMinimizeWidget(liveTextWidgetId);
+      }
+      
+      // Ensure it has a good default position if not already set
+      if (!settings.widgetPositions[liveTextWidgetId]) {
+        settings.setWidgetPosition(liveTextWidgetId, { x: 20, y: 20 });
+        settings.setWidgetSize(liveTextWidgetId, { width: 500, height: 400 });
+      }
+    }
+  }, []);  // Run once on component mount
+  
   // Helper to format time in human readable format
   const formatTime = (seconds: number) => {
     const h = Math.floor(seconds / 3600)
@@ -1153,6 +1199,15 @@ export default function RecordingTab() {
     }
   }, [])
 
+  // Add effect to auto-hide the widget hint after some time
+  useEffect(() => {
+    if (showWidgetHint) {
+      // Automatically hide the hint after 10 seconds
+      const timer = setTimeout(() => setShowWidgetHint(false), 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [showWidgetHint]);
+
   return (
     <div className="space-y-6">
       {/* Show saving overlay when saving */}
@@ -1164,6 +1219,37 @@ export default function RecordingTab() {
               <h3 className="font-semibold mb-1">Saving Recording</h3>
               <p className="text-sm text-muted-foreground">Please wait while we process and save your recording...</p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* First-time widget usage hint - only show when drag and drop is enabled */}
+      {showWidgetHint && settings.enableDragDrop && settings.minimizedWidgets.length > 0 && (
+        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-3 rounded-md flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Maximize2 className="h-5 w-5 text-blue-500 animate-pulse" />
+            <p className="text-sm text-blue-700 dark:text-blue-300">
+              <span className="font-medium">Widget hint:</span> All widgets are minimized. Click the <Maximize2 className="inline h-3 w-3 mx-1" /> button on any widget to expand it.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={resetAllWidgets}
+              className="h-8"
+            >
+              <RefreshCw className="h-3 w-3 mr-1" />
+              Reset Layout
+            </Button>
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              onClick={() => setShowWidgetHint(false)}
+              className="h-8 w-8 p-0"
+            >
+              <X className="h-4 w-4" />
+            </Button>
           </div>
         </div>
       )}
@@ -1629,103 +1715,226 @@ export default function RecordingTab() {
       </div>
 
       {/* Main Content Area */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Left Panel: Live Text */}
-        <Card className="overflow-hidden">
-          <div className="bg-muted p-2 flex items-center justify-between">
-            <h3 className="font-medium">Live Text</h3>
-            <div className="flex items-center gap-2">
-              <Select defaultValue="default">
-                <SelectTrigger className="w-[100px] h-8">
-                  <SelectValue placeholder="Font" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="default">Default</SelectItem>
-                  <SelectItem value="large">Large</SelectItem>
-                  <SelectItem value="small">Small</SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={copyToClipboard}
-                disabled={!hasContent}
-                aria-label="Copy to clipboard"
-              >
-                <Copy className="h-4 w-4" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8"
-                onClick={saveTranscript}
-                disabled={!hasContent}
-                aria-label="Download transcript"
-              >
-                <Download className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-          <div className="p-4 h-[400px] overflow-y-auto">
-            {liveText ? (
-              <div className="space-y-4">
-                {liveText
-                  .split(".")
-                  .filter(Boolean)
-                  .map((sentence, idx) => (
-                    <div key={idx} className="flex items-start gap-2">
-                      <span className="text-xs text-muted-foreground font-mono mt-1">{formatTime(idx * 5)}</span>
-                      <p>{sentence.trim()}.</p>
-                    </div>
-                  ))}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative">
+        {/* Only show draggable widgets when drag and drop is enabled */}
+        {settings.enableDragDrop ? (
+          <>
+            {/* Left Panel: Live Text - Modified to ensure it's always visible */}
+            <DraggableWidget
+              id="live-text"
+              title="Live Text"
+              defaultPosition={{ x: 0, y: 0 }}
+              className="w-full md:w-auto"
+              // Force visibility for this critical widget
+              forceVisible={true}
+            >
+              <div className="p-2 flex items-center justify-between border-b">
+                <div className="flex items-center gap-2">
+                  <Select defaultValue="default">
+                    <SelectTrigger className="w-[100px] h-8">
+                      <SelectValue placeholder="Font" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Default</SelectItem>
+                      <SelectItem value="large">Large</SelectItem>
+                      <SelectItem value="small">Small</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={copyToClipboard}
+                    disabled={!hasContent}
+                    aria-label="Copy to clipboard"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={saveTranscript}
+                    disabled={!hasContent}
+                    aria-label="Download transcript"
+                  >
+                    <Download className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
-            ) : (
-              <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
-                {isRecording ? (
-                  "Waiting for speech..."
+              <div className="p-4 h-[400px] overflow-y-auto">
+                {liveText ? (
+                  <div className="space-y-4">
+                    {liveText
+                      .split(".")
+                      .filter(Boolean)
+                      .map((sentence, idx) => (
+                        <div key={idx} className="flex items-start gap-2">
+                          <span className="text-xs text-muted-foreground font-mono mt-1">{formatTime(idx * 5)}</span>
+                          <p>{sentence.trim()}.</p>
+                        </div>
+                      ))}
+                  </div>
                 ) : (
-                  <>
-                    <FileText className="h-12 w-12 mb-4 opacity-20" />
-                    <p>Start recording to see transcription</p>
-                    <p className="text-sm mt-2">Press the play button or spacebar to begin</p>
-                  </>
+                  <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                    {isRecording ? (
+                      "Waiting for speech..."
+                    ) : (
+                      <>
+                        <FileText className="h-12 w-12 mb-4 opacity-20" />
+                        <p>Start recording to see transcription</p>
+                        <p className="text-sm mt-2">Press the play button or spacebar to begin</p>
+                      </>
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
-        </Card>
+            </DraggableWidget>
 
-        {/* Right Panel: Tabbed Interface */}
-        <Card className="overflow-hidden">
-          <Tabs defaultValue="insights">
-            <div className="bg-muted p-2">
-              <TabsList className="grid w-full grid-cols-3">
-                <TabsTrigger value="insights">AI Insights</TabsTrigger>
-                <TabsTrigger value="curiosity">Curiosity Engine</TabsTrigger>
-                <TabsTrigger value="compass">Conversation Compass</TabsTrigger>
-              </TabsList>
-            </div>
-
-            <TabsContent value="insights" className="p-4 h-[400px] overflow-y-auto">
-              {hasContent ? (
-                <AIAnalysisPanel transcript={liveText} />
-              ) : (
-                <div className="h-full flex items-center justify-center text-muted-foreground">
-                  No insights available yet
+            {/* Right Panel: AI Insights */}
+            <DraggableWidget
+              id="ai-insights"
+              title="AI Insights"
+              defaultPosition={{ x: 0, y: 0 }}
+              className="w-full md:w-auto"
+            >
+              <Tabs defaultValue="insights">
+                <div className="bg-muted p-2 border-b">
+                  <TabsList className="grid w-full grid-cols-3">
+                    <TabsTrigger value="insights">AI Insights</TabsTrigger>
+                    <TabsTrigger value="curiosity">Curiosity Engine</TabsTrigger>
+                    <TabsTrigger value="compass">Conversation Compass</TabsTrigger>
+                  </TabsList>
                 </div>
-              )}
-            </TabsContent>
 
-            <TabsContent value="curiosity" className="h-[400px] overflow-y-auto">
-              <CuriosityEngine hasContent={hasContent} transcript={liveText} />
-            </TabsContent>
+                <TabsContent value="insights" className="p-4 h-[400px] overflow-y-auto">
+                  {hasContent ? (
+                    <AIAnalysisPanel transcript={liveText} />
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-muted-foreground">
+                      No insights available yet
+                    </div>
+                  )}
+                </TabsContent>
 
-            <TabsContent value="compass" className="h-[400px] overflow-y-auto">
-              <ConversationCompass hasContent={hasContent} />
-            </TabsContent>
-          </Tabs>
-        </Card>
+                <TabsContent value="curiosity" className="h-[400px] overflow-y-auto">
+                  <CuriosityEngine hasContent={hasContent} transcript={liveText} />
+                </TabsContent>
+
+                <TabsContent value="compass" className="h-[400px] overflow-y-auto">
+                  <ConversationCompass hasContent={hasContent} />
+                </TabsContent>
+              </Tabs>
+            </DraggableWidget>
+          </>
+        ) : (
+          <>
+            {/* Standard non-draggable layout for when drag and drop is disabled */}
+            <Card className="overflow-hidden shadow-md">
+              <div className="flex items-center justify-between p-3 bg-gradient-to-r from-accent/40 to-muted border-b">
+                <span className="font-medium text-sm">Live Text</span>
+              </div>
+              <div className="p-2 flex items-center justify-between border-b">
+                <div className="flex items-center gap-2">
+                  <Select defaultValue="default">
+                    <SelectTrigger className="w-[100px] h-8">
+                      <SelectValue placeholder="Font" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Default</SelectItem>
+                      <SelectItem value="large">Large</SelectItem>
+                      <SelectItem value="small">Small</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={copyToClipboard}
+                    disabled={!hasContent}
+                    aria-label="Copy to clipboard"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={saveTranscript}
+                    disabled={!hasContent}
+                    aria-label="Download transcript"
+                  >
+                    <Download className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+              <div className="p-4 h-[400px] overflow-y-auto">
+                {liveText ? (
+                  <div className="space-y-4">
+                    {liveText
+                      .split(".")
+                      .filter(Boolean)
+                      .map((sentence, idx) => (
+                        <div key={idx} className="flex items-start gap-2">
+                          <span className="text-xs text-muted-foreground font-mono mt-1">{formatTime(idx * 5)}</span>
+                          <p>{sentence.trim()}.</p>
+                        </div>
+                      ))}
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                    {isRecording ? (
+                      "Waiting for speech..."
+                    ) : (
+                      <>
+                        <FileText className="h-12 w-12 mb-4 opacity-20" />
+                        <p>Start recording to see transcription</p>
+                        <p className="text-sm mt-2">Press the play button or spacebar to begin</p>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </Card>
+
+            <Card className="overflow-hidden shadow-md">
+              <div className="flex items-center justify-between p-3 bg-gradient-to-r from-accent/40 to-muted border-b">
+                <span className="font-medium text-sm">AI Insights</span>
+              </div>
+              <Tabs defaultValue="insights">
+                <div className="bg-muted p-2 border-b">
+                  <TabsList className="grid w-full grid-cols-3">
+                    <TabsTrigger value="insights">AI Insights</TabsTrigger>
+                    <TabsTrigger value="curiosity">Curiosity Engine</TabsTrigger>
+                    <TabsTrigger value="compass">Conversation Compass</TabsTrigger>
+                  </TabsList>
+                </div>
+
+                <TabsContent value="insights" className="p-4 h-[400px] overflow-y-auto">
+                  {hasContent ? (
+                    <AIAnalysisPanel transcript={liveText} />
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-muted-foreground">
+                      No insights available yet
+                    </div>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="curiosity" className="h-[400px] overflow-y-auto">
+                  <CuriosityEngine hasContent={hasContent} transcript={liveText} />
+                </TabsContent>
+
+                <TabsContent value="compass" className="h-[400px] overflow-y-auto">
+                  <ConversationCompass hasContent={hasContent} />
+                </TabsContent>
+              </Tabs>
+            </Card>
+          </>
+        )}
       </div>
 
       {/* Bottom Controls */}
@@ -1757,64 +1966,322 @@ export default function RecordingTab() {
         </div>
       </div>
 
-      {/* Bookmark Panel */}
-      <Card className="p-4">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="font-medium">Bookmarks</h3>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              toast({
-                title: "Voice Commands",
-                description: "Voice command functionality will be available in a future update.",
-              })
-            }}
+      {/* Only render these additional widgets when drag and drop is enabled */}
+      {settings.enableDragDrop && (
+        <>
+          {/* Bookmark Panel */}
+          <DraggableWidget
+            id="bookmarks"
+            title="Bookmarks"
+            defaultPosition={{ x: 0, y: 0 }}
+            className="w-full"
           >
-            <MessageSquare className="h-4 w-4 mr-2" />
-            Voice Commands
-          </Button>
-        </div>
-        <div className="flex items-center gap-2 mb-4">
-          <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(false)}>
-            <Bookmark className="h-4 w-4 mr-2" />
-            Quick Bookmark (F8)
-          </Button>
-          <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(true)}>
-            <Bookmark className="h-4 w-4 mr-2" />
-            Named Bookmark (F9)
-          </Button>
-          <Button variant="outline" disabled={!isRecording} onClick={triggerManualAnalysis}>
-            <HelpCircle className="h-4 w-4 mr-2" />
-            Full Analysis (F10)
-          </Button>
-        </div>
-
-        {bookmarks.length > 0 ? (
-          <div className="space-y-2">
-            {bookmarks.map((bookmark, index) => (
-              <div key={index} className="flex items-center justify-between p-2 border rounded-md">
-                <div className="flex items-center gap-2">
-                  <Bookmark className="h-4 w-4 text-primary" />
-                  <span className="text-sm font-medium">{bookmark.name}</span>
-                  <span className="text-xs text-muted-foreground">{formatTime(bookmark.time)}</span>
-                </div>
+            <div className="p-4">
+              <div className="flex items-center justify-between mb-4">
                 <Button
-                  variant="ghost"
+                  variant="outline"
                   size="sm"
                   onClick={() => {
-                    setBookmarks(bookmarks.filter((_, i) => i !== index))
+                    toast({
+                      title: "Voice Commands",
+                      description: "Voice command functionality will be available in a future update.",
+                    })
                   }}
                 >
-                  <X className="h-4 w-4" />
+                  <MessageSquare className="h-4 w-4 mr-2" />
+                  Voice Commands
                 </Button>
               </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center text-muted-foreground py-4">No bookmarks yet</div>
-        )}
-      </Card>
+              <div className="flex items-center gap-2 mb-4">
+                <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(false)}>
+                  <Bookmark className="h-4 w-4 mr-2" />
+                  Quick Bookmark (F8)
+                </Button>
+                <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(true)}>
+                  <Bookmark className="h-4 w-4 mr-2" />
+                  Named Bookmark (F9)
+                </Button>
+                <Button variant="outline" disabled={!isRecording} onClick={triggerManualAnalysis}>
+                  <HelpCircle className="h-4 w-4 mr-2" />
+                  Full Analysis (F10)
+                </Button>
+              </div>
+
+              {bookmarks.length > 0 ? (
+                <div className="space-y-2">
+                  {bookmarks.map((bookmark, index) => (
+                    <div key={index} className="flex items-center justify-between p-2 border rounded-md">
+                      <div className="flex items-center gap-2">
+                        <Bookmark className="h-4 w-4 text-primary" />
+                        <span className="text-sm font-medium">{bookmark.name}</span>
+                        <span className="text-xs text-muted-foreground">{formatTime(bookmark.time)}</span>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setBookmarks(bookmarks.filter((_, i) => i !== index))
+                        }}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center text-muted-foreground py-4">No bookmarks yet</div>
+              )}
+            </div>
+          </DraggableWidget>
+
+          {/* Audio Controls Widget */}
+          <DraggableWidget
+            id="audio-controls"
+            title="Audio Controls"
+            defaultPosition={{ x: 0, y: 0 }}
+            className="w-full"
+          >
+            <div className="p-4">
+              {/* Fix AudioVisualizer props */}
+              <AudioVisualizer isActive={isRecording && !isMuted} />
+              <div className="mt-2 flex items-center justify-between">
+                <span className="text-sm font-medium">{formatTime(recordingTime)}</span>
+                <span className="text-sm">{wordCount} words</span>
+              </div>
+            </div>
+          </DraggableWidget>
+
+          {/* Analysis Settings Widget */}
+          <DraggableWidget
+            id="analysis-settings"
+            title="Analysis Settings"
+            defaultPosition={{ x: 0, y: 0 }}
+            className="w-full"
+          >
+            <div className="p-4">
+              <div className="flex flex-col gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="analysis-interval">Analysis Interval</Label>
+                  <Select
+                    value={analysisInterval}
+                    onValueChange={setAnalysisInterval}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select interval" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="manual">Manual Only</SelectItem>
+                      <SelectItem value="time-30">Every 30 seconds</SelectItem>
+                      <SelectItem value="time-60">Every minute</SelectItem>
+                      <SelectItem value="time-300">Every 5 minutes</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="profile-select">Analytics Profile</Label>
+                  <div className="flex items-center gap-2">
+                    <Select value={templateStore.activeTemplate} onValueChange={templateStore.setActiveTemplate}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select Analytics Profile" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectLabel>Built-in Profiles</SelectLabel>
+                          {templateStore.templates
+                            .filter((template) => template.name.startsWith("*"))
+                            .map((template) => (
+                              <SelectItem key={template.name} value={template.name}>
+                                {template.name.substring(1)}
+                              </SelectItem>
+                            ))}
+                        </SelectGroup>
+                        <SelectGroup>
+                          <SelectLabel>Custom Profiles</SelectLabel>
+                          {templateStore.templates
+                            .filter((template) => !template.name.startsWith("*"))
+                            .map((template) => (
+                              <SelectItem key={template.name} value={template.name}>
+                                {template.name}
+                              </SelectItem>
+                            ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => {
+                        setIsProfileEditorOpen(true)
+                      }}
+                      title="Edit profile"
+                    >
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </DraggableWidget>
+
+          {/* Tags Widget */}
+          <DraggableWidget
+            id="tags"
+            title="Tags"
+            defaultPosition={{ x: 0, y: 0 }}
+            className="w-full"
+          >
+            <div className="p-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-medium">Conversation Tags</h3>
+                <Button variant="outline" size="sm" onClick={() => setIsTagEditorOpen(true)}>
+                  <TagIcon className="h-4 w-4 mr-2" />
+                  Manage Tags
+                </Button>
+              </div>
+              
+              {tags.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {tags.map(tag => (
+                    <Tag 
+                      key={tag.id}
+                      name={tag.name}
+                      color={tag.color}
+                      className={TAG_COLORS.find(c => c.value === tag.color)?.class}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center text-muted-foreground py-4">
+                  No tags added yet. Click "Manage Tags" to add some.
+                </div>
+              )}
+            </div>
+          </DraggableWidget>
+
+          {/* Conversations Compass Widget - Add this outside your tab panel so it's draggable independently */}
+          <DraggableWidget
+            id="conversation-compass-widget"
+            title="Conversation Compass"
+            defaultPosition={{ x: 0, y: 0 }}
+            className="w-full"
+          >
+            <div className="p-4 h-[300px] overflow-auto">
+              <ConversationCompass hasContent={hasContent} />
+            </div>
+          </DraggableWidget>
+
+          {/* Curiosity Engine Widget - Add this outside your tab panel so it's draggable independently */}
+          <DraggableWidget
+            id="curiosity-engine-widget"
+            title="Curiosity Engine"
+            defaultPosition={{ x: 0, y: 0 }}
+            className="w-full"
+          >
+            <div className="p-4 h-[300px] overflow-auto">
+              <CuriosityEngine hasContent={hasContent} transcript={liveText} />
+            </div>
+          </DraggableWidget>
+        </>
+      )}
+      {/* Render standard non-draggable widgets for bottom widgets when drag and drop is disabled */}
+      {!settings.enableDragDrop && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+          <Card className="overflow-hidden shadow-md">
+            <div className="flex items-center justify-between p-3 bg-gradient-to-r from-accent/40 to-muted border-b">
+              <span className="font-medium text-sm">Bookmarks</span>
+            </div>
+            <div className="p-4">
+              <div className="flex items-center justify-between mb-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    toast({
+                      title: "Voice Commands",
+                      description: "Voice command functionality will be available in a future update.",
+                    })
+                  }}
+                >
+                  <MessageSquare className="h-4 w-4 mr-2" />
+                  Voice Commands
+                </Button>
+              </div>
+              <div className="flex items-center gap-2 mb-4">
+                <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(false)}>
+                  <Bookmark className="h-4 w-4 mr-2" />
+                  Quick Bookmark (F8)
+                </Button>
+                <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(true)}>
+                  <Bookmark className="h-4 w-4 mr-2" />
+                  Named Bookmark (F9)
+                </Button>
+                <Button variant="outline" disabled={!isRecording} onClick={triggerManualAnalysis}>
+                  <HelpCircle className="h-4 w-4 mr-2" />
+                  Full Analysis (F10)
+                </Button>
+              </div>
+
+              {bookmarks.length > 0 ? (
+                <div className="space-y-2">
+                  {bookmarks.map((bookmark, index) => (
+                    <div key={index} className="flex items-center justify-between p-2 border rounded-md">
+                      <div className="flex items-center gap-2">
+                        <Bookmark className="h-4 w-4 text-primary" />
+                        <span className="text-sm font-medium">{bookmark.name}</span>
+                        <span className="text-xs text-muted-foreground">{formatTime(bookmark.time)}</span>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setBookmarks(bookmarks.filter((_, i) => i !== index))
+                        }}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center text-muted-foreground py-4">No bookmarks yet</div>
+              )}
+            </div>
+          </Card>
+
+          <Card className="overflow-hidden shadow-md">
+            <div className="flex items-center justify-between p-3 bg-gradient-to-r from-accent/40 to-muted border-b">
+              <span className="font-medium text-sm">Tags</span>
+            </div>
+            <div className="p-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-medium">Conversation Tags</h3>
+                <Button variant="outline" size="sm" onClick={() => setIsTagEditorOpen(true)}>
+                  <TagIcon className="h-4 w-4 mr-2" />
+                  Manage Tags
+                </Button>
+              </div>
+              
+              {tags.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {tags.map(tag => (
+                    <div 
+                      key={tag.id} 
+                      className={`px-2 py-1 rounded-full text-xs font-medium border ${TAG_COLORS.find(c => c.value === tag.color)?.class}`}
+                    >
+                      {tag.name}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center text-muted-foreground py-4">
+                  No tags added yet. Click "Manage Tags" to add some.
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
+
       <ProfileEditorDialog
         open={isProfileEditorOpen}
         onOpenChange={(open) => {

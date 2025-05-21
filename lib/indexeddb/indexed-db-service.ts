@@ -19,6 +19,9 @@ export interface LocalRecording {
   isPublic: boolean
   transcript?: string | null
   summary?: string | null
+  speakers?: number | null
+  sentiment?: string | null
+  meta?: string | null  // JSON string with detailed transcript metadata
   tags?: string | null  // JSON string of Tag[] - [{id: string, name: string, color: string}]
 }
 
@@ -167,6 +170,9 @@ export const indexedDBService = {
         isPublic: params.isPublic || false,
         transcript: null,
         summary: null,
+        speakers: null,
+        sentiment: null,
+        meta: null,
         tags: params.tags || null,
       }
       
@@ -304,7 +310,10 @@ export const indexedDBService = {
   async addTranscriptToRecording(
     id: string,
     transcript: string,
-    summary: string | null = null
+    summary: string | null = null,
+    speakers: number | null = null,
+    sentiment: string | null = null,
+    meta: string | null = null
   ): Promise<LocalRecording | null> {
     try {
       const recording = await this.getRecording(id)
@@ -317,7 +326,10 @@ export const indexedDBService = {
         ...recording,
         isProcessed: true,
         transcript,
-        summary
+        summary,
+        speakers,
+        sentiment,
+        meta
       }
       
       const db = await initDB()
