@@ -36,6 +36,9 @@ import {
   Sparkles,
   Mic,
   Cloud,
+  Move,
+  Minus,
+  Maximize2,
 } from "lucide-react"
 import {
   useSettingsStore,
@@ -58,6 +61,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import SilenceAlertDialog from "./silence-alert-dialog"
+import { Card } from "@/components/ui/card"
 
 interface SettingsModalProps {
   open: boolean
@@ -353,7 +357,7 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-4">
-          <TabsList className="grid w-full grid-cols-6">
+          <TabsList className="grid w-full grid-cols-7">
             <TabsTrigger value="general">
               <Sliders className="h-4 w-4 mr-2" />
               General
@@ -377,6 +381,10 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
             <TabsTrigger value="system">
               <Settings2 className="h-4 w-4 mr-2" />
               System
+            </TabsTrigger>
+            <TabsTrigger value="widgets">
+              <Move className="h-4 w-4 mr-2" />
+              Widgets
             </TabsTrigger>
           </TabsList>
 
@@ -1310,6 +1318,79 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
                 </AccordionContent>
               </AccordionItem>
             </Accordion>
+          </TabsContent>
+
+          {/* Widgets Tab */}
+          <TabsContent value="widgets" className="space-y-6 py-4">
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <h3 className="text-lg font-medium">Widget Settings</h3>
+                <div className="px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-medium">
+                  New Feature
+                </div>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Control how widgets behave in the recording tab.
+              </p>
+              
+              <Card className="p-4 border-2 border-blue-200 dark:border-blue-900 bg-blue-50 dark:bg-blue-950/30">
+                <div className="flex items-center justify-between space-x-2 mb-4">
+                  <Label htmlFor="enable-drag-drop" className="flex flex-col space-y-1">
+                    <span className="text-base font-medium">Enable Drag & Drop</span>
+                    <span className="font-normal text-sm text-muted-foreground">
+                      When enabled: widgets can be moved, minimized, and maximized. Widget headers 
+                      will show a drag handle for repositioning.
+                    </span>
+                    <span className="font-normal text-sm text-muted-foreground mt-1">
+                      When disabled: widgets will have a fixed layout without minimize/maximize controls.
+                    </span>
+                    <span className="font-normal text-xs text-blue-600 dark:text-blue-400 mt-1">
+                      When drag & drop is enabled, all widgets start minimized by default. Click the maximize button to expand them.
+                    </span>
+                  </Label>
+                  <Switch
+                    id="enable-drag-drop"
+                    checked={settings.enableDragDrop}
+                    onCheckedChange={settings.setEnableDragDrop}
+                    className="data-[state=checked]:bg-blue-600"
+                  />
+                </div>
+                
+                <div className="border-t pt-4 mt-2 border-dashed border-muted flex flex-col gap-4 items-center">
+                  <Button 
+                    variant="outline" 
+                    onClick={() => {
+                      settings.resetWidgetPositions();
+                      toast({
+                        title: "Layout Reset",
+                        description: "All widgets have been reset to their default positions and minimized.",
+                      });
+                    }}
+                    className="flex items-center gap-2 border-blue-200 dark:border-blue-900 text-blue-700 dark:text-blue-400 w-full"
+                    disabled={!settings.enableDragDrop}
+                  >
+                    <RefreshCw className="h-4 w-4" />
+                    Reset All Widget Positions & States
+                  </Button>
+                  <p className="text-xs text-center text-muted-foreground">
+                    {settings.enableDragDrop 
+                      ? "This will reset all widgets to their default positions and minimize them all."
+                      : "Enable drag & drop above to allow widget repositioning."}
+                  </p>
+                </div>
+              </Card>
+              
+              <div className="pt-4 flex flex-col gap-2">
+                <h4 className="font-medium">How to use drag and drop:</h4>
+                <ol className="text-sm text-muted-foreground space-y-1.5 ml-5 list-decimal">
+                  <li>Enable drag and drop using the switch above</li>
+                  <li>Click the maximize button <Maximize2 className="inline h-3 w-3" /> to expand a widget</li>
+                  <li>Use the widget headers <Move className="inline h-3 w-3 ml-1" /> to drag widgets to new positions</li>
+                  <li>Click the minimize button <Minus className="inline h-3 w-3" /> to collapse a widget</li>
+                  <li>Use "Reset All Widget Positions" to return to the default layout</li>
+                </ol>
+              </div>
+            </div>
           </TabsContent>
 
           {/* Account Settings */}

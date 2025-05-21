@@ -22,6 +22,8 @@ import { unifiedRecordingsService } from "@/lib/recordings-service"
 import { useSettingsStore } from "@/lib/settings-store"
 import { indexedDBService } from "@/lib/indexeddb/indexed-db-service"
 import RecordingHeatmap from "./recording-heatmap"
+import { cn } from "@/lib/utils"
+import { getWeekNumber, getCurrentWeek } from "@/lib/date-utils"
 
 // Add useDebounce hook at the top after imports
 function useDebounce<T>(value: T, delay: number): T {
@@ -556,11 +558,10 @@ export default function LibraryTab() {
   useEffect(() => {
     // Set current week to include today's date
     const today = new Date();
-    const currentWeekNumber = getWeekNumber(today);
+    const currentWeekNumber = getCurrentWeek();
     console.log("Current week calculation:", { 
       today, 
-      currentWeekNumber, 
-      calculated: getWeekNumber(today) 
+      currentWeekNumber
     });
     setCurrentWeek(currentWeekNumber);
     // Also set the week view flag to true to default to week view
@@ -3158,7 +3159,7 @@ export default function LibraryTab() {
                       className="h-8 px-2 text-xs ml-1 flex items-center gap-1 hover:bg-blue-50 dark:hover:bg-blue-900/30"
                       onClick={() => {
                         const today = new Date();
-                        const currentWeekNumber = getWeekNumber(today);
+                        const currentWeekNumber = getCurrentWeek();
                         setCurrentWeek(currentWeekNumber);
                       }}
                       title="Jump to current week"
