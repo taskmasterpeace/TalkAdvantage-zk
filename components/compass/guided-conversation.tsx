@@ -7,21 +7,28 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
-import { Mic, MicOff, Send, Target, MessageCircle, RotateCcw } from "lucide-react"
+import { Mic, MicOff, Send, Target, MessageCircle, RotateCcw, Loader2 } from "lucide-react"
 import { evaluateGoalProgress } from "@/lib/services/prediction-engine"
 import { cn } from "@/lib/utils"
+import { refineGoal, expandTalkingPoints, generateConversationGraph } from "@/lib/services/compass-service"
+import { useToast } from "@/hooks/use-toast"
 
 interface GuidedConversationProps {
   className?: string
 }
 
 export function GuidedConversation({ className }: GuidedConversationProps) {
+  const { toast } = useToast()
   const [userInput, setUserInput] = useState("")
   const [otherInput, setOtherInput] = useState("")
   const [isRecording, setIsRecording] = useState(false)
   const [goalDialogOpen, setGoalDialogOpen] = useState(false)
   const [newGoal, setNewGoal] = useState("")
   const [goalProgress, setGoalProgress] = useState(0)
+  const [isRefiningGoal, setIsRefiningGoal] = useState(false)
+  const [refinedGoals, setRefinedGoals] = useState<string[]>([])
+  const [isExpandingTalkingPoints, setIsExpandingTalkingPoints] = useState(false)
+  const [expandedPoints, setExpandedPoints] = useState<string[]>([])
 
   // Get state and actions from the compass store
   const {
@@ -35,113 +42,196 @@ export function GuidedConversation({ className }: GuidedConversationProps) {
     generatePredictions,
     matchResponse,
     resetCompass,
+    addBeam,
   } = useCompassStore()
 
   // Get suggested responses (predicted nodes from current node)
   const suggestedResponses = nodes.filter((node) => node.type === "predicted" && node.fromNodeId === currentNodeId)
 
-  // Handle goal submission
-  const handleGoalSubmit = () => {
-    if (newGoal.trim()) {
-      setGoal(newGoal.trim())
-      setGoalDialogOpen(false)
-      resetCompass()
+  // Show goal dialog if no goal is set
+  useEffect(() => {
+    if (!goal && nodes.length === 0) {
+      setGoalDialogOpen(true)
+      // Set a default goal suggestion
+      setNewGoal("Have a productive conversation about project progress")
+    }
+  }, [goal, nodes])
 
-      // Create a goal node
-      const goalNodeId = addNode({
-        type: "goal",
-        text: newGoal.trim(),
-        isActive: true,
-      })
-
-      setCurrentNode(goalNodeId)
+  // Handle goal submission with refinement
+  const handleGoalSubmit = async () => {
+    if (!newGoal.trim()) return
+    
+    setIsRefiningGoal(true)
+    try {
+      // Get refined goal suggestions
+      const suggestions = await refineGoal(newGoal.trim())
+      
+      if (suggestions.length === 1 && suggestions[0] === newGoal.trim()) {
+        // Goal is already clear, proceed with it
+        await handleRefinedGoalSelect(newGoal.trim())
+      } else {
+        // Show refined goal suggestions
+        setRefinedGoals(suggestions)
+      }
+    } catch (error) {
+      console.error('Error refining goal:', error)
+      // If error occurs, just use the original goal
+      await handleRefinedGoalSelect(newGoal.trim())
+    } finally {
+      setIsRefiningGoal(false)
     }
   }
 
-  // Handle user input submission
-  const handleUserInputSubmit = () => {
-    if (!userInput.trim()) return
+  // Handle selection of a refined goal
+  const handleRefinedGoalSelect = async (selectedGoal: string) => {
+    setGoal(selectedGoal)
+    setGoalDialogOpen(false)
+    resetCompass()
 
-    // Add user node
-    const userNodeId = addNode({
-      type: "user",
-      text: userInput.trim(),
-      fromNodeId: currentNodeId,
-      speaker: "user",
+    // Create a goal node
+    const goalNodeId = addNode({
+      type: "goal",
+      text: selectedGoal,
+      fromNodeId: null,
       isActive: true,
+      speaker: "system"
     })
 
-    // Set as current node
-    setCurrentNode(userNodeId)
+    setCurrentNode(goalNodeId)
+    setRefinedGoals([])
 
-    // Generate predictions
-    generatePredictions(userInput.trim())
+    // Generate initial conversation graph
+    try {
+      const graph = await generateConversationGraph({
+        goal: selectedGoal,
+      })
 
-    // Clear input
-    setUserInput("")
+      // Add initial nodes and edges from the graph
+      graph.nodes.forEach(node => {
+        const nodeId = addNode({
+          type: "predicted",
+          text: node.label,
+          expandedTalkingPoints: node.expandedTalkingPoints,
+          intent: node.intent,
+          goalProximity: node.goalProximity,
+          fromNodeId: goalNodeId,
+          speaker: "other",
+          isActive: false
+        })
+
+        // Add beam connecting to the prediction
+        addBeam({
+          fromNodeId: goalNodeId,
+          toNodeId: nodeId,
+          thickness: 0.8,
+          isActive: false
+        })
+      })
+    } catch (error) {
+      console.error('Error generating conversation graph:', error)
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to generate conversation suggestions. You can still proceed manually.",
+      })
+    }
   }
+
+  // Handle user input submission with expanded talking points
+  const handleUserInputSubmit = async () => {
+    if (!userInput.trim()) return;
+
+    setIsExpandingTalkingPoints(true);
+    try {
+      // Get expanded talking points
+      const points = await expandTalkingPoints(userInput.trim());
+      setExpandedPoints(points);
+
+      // Add user node
+      const userNodeId = addNode({
+        type: "user",
+        text: userInput.trim(),
+        fromNodeId: currentNodeId,
+        speaker: "user",
+        isActive: true,
+        expandedTalkingPoints: points,
+      });
+
+      // Set as current node
+      setCurrentNode(userNodeId);
+
+      // Generate predictions
+      generatePredictions(userInput.trim());
+
+      // Clear input
+      setUserInput("");
+    } catch (error) {
+      console.error('Error expanding talking points:', error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to generate talking points.",
+      });
+    } finally {
+      setIsExpandingTalkingPoints(false);
+    }
+  };
 
   // Handle other person's response
   const handleOtherInputSubmit = () => {
-    if (!otherInput.trim()) return
+    if (!otherInput.trim()) return;
 
     // Match response to predictions or create new node
-    matchResponse(otherInput.trim())
+    matchResponse(otherInput.trim());
 
     // Clear input
-    setOtherInput("")
-  }
+    setOtherInput("");
+    setExpandedPoints([]);
+  };
 
   // Handle suggested response click
   const handleSuggestedResponseClick = (text: string) => {
-    setOtherInput(text)
-  }
+    setOtherInput(text);
+  };
 
   // Toggle recording
   const toggleRecording = () => {
-    setIsRecording(!isRecording)
+    setIsRecording(!isRecording);
     // In a real implementation, this would start/stop speech recognition
-  }
+  };
 
   // Update goal progress
   useEffect(() => {
     const updateGoalProgress = async () => {
       if (!goal || nodes.length < 2) {
-        setGoalProgress(0)
-        return
+        setGoalProgress(0);
+        return;
       }
 
       // Build conversation history
       const history = nodes
         .filter((node) => node.type === "user" || node.type === "actual")
         .map((node) => {
-          const speaker = node.speaker === "user" ? "User" : "Other"
-          return `${speaker}: ${node.text}`
+          const speaker = node.speaker === "user" ? "User" : "Other";
+          return `${speaker}: ${node.text}`;
         })
-        .join("\n")
+        .join("\n");
 
       // Evaluate progress
-      const progress = await evaluateGoalProgress(goal, history)
-      setGoalProgress(progress)
+      const progress = await evaluateGoalProgress(goal, history);
+      setGoalProgress(progress);
 
       // If goal is achieved (progress > 0.9), highlight the goal node
       if (progress > 0.9) {
-        const goalNode = nodes.find((node) => node.type === "goal")
+        const goalNode = nodes.find((node) => node.type === "goal");
         if (goalNode) {
-          useCompassStore.getState().updateNode(goalNode.id, { isHighlighted: true })
+          useCompassStore.getState().updateNode(goalNode.id, { isHighlighted: true });
         }
       }
-    }
+    };
 
-    updateGoalProgress()
-  }, [goal, nodes])
-
-  // Show goal dialog if no goal is set
-  useEffect(() => {
-    if (!goal && nodes.length === 0) {
-      setGoalDialogOpen(true)
-    }
-  }, [goal, nodes])
+    updateGoalProgress();
+  }, [goal, nodes]);
 
   return (
     <div className={cn("flex flex-col h-full", className)}>
@@ -184,7 +274,16 @@ export function GuidedConversation({ className }: GuidedConversationProps) {
                   onClick={() => handleSuggestedResponseClick(node.text)}
                 >
                   <MessageCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
-                  <span>{node.text}</span>
+                  <div className="space-y-1">
+                    <div>{node.text}</div>
+                    {node.expandedTalkingPoints && node.expandedTalkingPoints.length > 0 && (
+                      <div className="text-xs text-muted-foreground pl-4 border-l-2 border-muted-foreground/20">
+                        {node.expandedTalkingPoints.map((point, index) => (
+                          <div key={index} className="mt-1">• {point}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -215,8 +314,15 @@ export function GuidedConversation({ className }: GuidedConversationProps) {
             className="flex-1"
             onKeyDown={(e) => e.key === "Enter" && handleUserInputSubmit()}
           />
-          <Button onClick={handleUserInputSubmit} disabled={!userInput.trim()}>
-            <Send className="h-4 w-4 mr-2" />
+          <Button 
+            onClick={handleUserInputSubmit} 
+            disabled={!userInput.trim() || isExpandingTalkingPoints}
+          >
+            {isExpandingTalkingPoints ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            ) : (
+              <Send className="h-4 w-4 mr-2" />
+            )}
             Send
           </Button>
         </div>
@@ -233,6 +339,21 @@ export function GuidedConversation({ className }: GuidedConversationProps) {
             Match
           </Button>
         </div>
+
+        {/* Expanded talking points */}
+        {expandedPoints.length > 0 && (
+          <div className="p-2 bg-muted rounded-md">
+            <h5 className="text-sm font-medium mb-2">Expanded Talking Points:</h5>
+            <div className="space-y-1 text-sm">
+              {expandedPoints.map((point, index) => (
+                <div key={index} className="flex items-start gap-2">
+                  <span className="text-muted-foreground">•</span>
+                  <span>{point}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Goal dialog */}
@@ -251,14 +372,43 @@ export function GuidedConversation({ className }: GuidedConversationProps) {
             <p className="text-sm text-muted-foreground mt-2">
               A clear goal helps the AI generate better suggestions for your conversation.
             </p>
+
+            {/* Refined goals section */}
+            {refinedGoals.length > 0 && (
+              <div className="mt-4 space-y-2">
+                <h4 className="text-sm font-medium">Suggested Refined Goals:</h4>
+                <div className="space-y-2">
+                  {refinedGoals.map((goal, index) => (
+                    <Button
+                      key={index}
+                      variant="outline"
+                      className="w-full justify-start text-left h-auto py-2"
+                      onClick={() => handleRefinedGoalSelect(goal)}
+                    >
+                      {goal}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
-            <Button onClick={handleGoalSubmit} disabled={!newGoal.trim()}>
-              Set Goal
+            <Button 
+              onClick={handleGoalSubmit} 
+              disabled={!newGoal.trim() || isRefiningGoal}
+            >
+              {isRefiningGoal ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Refining Goal...
+                </>
+              ) : (
+                'Set Goal'
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
-  )
+  );
 }

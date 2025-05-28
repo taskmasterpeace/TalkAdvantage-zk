@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -17,6 +17,29 @@ export default function DeepAnalysisTab() {
   const [searchQuery, setSearchQuery] = useState("")
   const [visualizationType, setVisualizationType] = useState("wordcloud")
 
+  // Load selected transcripts from localStorage on component mount
+  useEffect(() => {
+    const storedTranscripts = localStorage.getItem('selectedTranscripts');
+    if (storedTranscripts) {
+      try {
+        const parsedTranscripts = JSON.parse(storedTranscripts);
+        setSelectedTranscripts(parsedTranscripts);
+        // Clear the stored transcripts after loading
+        localStorage.removeItem('selectedTranscripts');
+      } catch (error) {
+        console.error('Error parsing stored transcripts:', error);
+      }
+    }
+  }, []);
+
+  const removeTranscript = (id: string) => {
+    setSelectedTranscripts(prev => prev.filter(t => t.id !== id));
+  };
+
+  const clearAllTranscripts = () => {
+    setSelectedTranscripts([]);
+  };
+
   const demoTranscripts: any[] = []
 
   const demoTranscriptText = ""
@@ -31,7 +54,12 @@ export default function DeepAnalysisTab() {
         <Card>
           <div className="bg-muted p-2 flex items-center justify-between">
             <h3 className="font-medium">Selected Transcripts</h3>
-            <Button variant="ghost" size="icon">
+            <Button 
+              variant="ghost" 
+              size="icon"
+              onClick={clearAllTranscripts}
+              disabled={selectedTranscripts.length === 0}
+            >
               <X className="h-4 w-4" />
             </Button>
           </div>
@@ -42,16 +70,25 @@ export default function DeepAnalysisTab() {
                   <div key={transcript.id} className="flex items-center justify-between p-2 bg-muted/30 rounded-md">
                     <div>
                       <div className="font-medium text-sm">{transcript.name}</div>
-                      <div className="text-xs text-muted-foreground">{transcript.date}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {new Date(transcript.created_at).toLocaleDateString()}
+                      </div>
                     </div>
-                    <Button variant="ghost" size="icon" className="h-8 w-8">
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-8 w-8"
+                      onClick={() => removeTranscript(transcript.id)}
+                    >
                       <X className="h-4 w-4" />
                     </Button>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="flex items-center justify-center h-20 text-muted-foreground">No transcripts selected</div>
+              <div className="flex items-center justify-center h-20 text-muted-foreground">
+                No transcripts selected. Select recordings from the library to analyze.
+              </div>
             )}
           </div>
         </Card>

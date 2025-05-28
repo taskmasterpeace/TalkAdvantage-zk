@@ -60,6 +60,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import SilenceAlertDialog from "./silence-alert-dialog"
 import DraggableWidget from "./draggable-widget"
 import { Tag } from "@/components/ui/tag"
+import { useLayoutStore } from "@/lib/layout-store"
+import { LayoutManager } from "./layout-manager"
+import { WidgetPicker } from "./widget-picker"
+import { AnalysisTimer } from "@/components/analysis-timer"
 
 // Add a type for the recording state to improve type safety
 type RecordingState = "idle" | "recording" | "paused"
@@ -80,6 +84,25 @@ const TAG_COLORS = [
   { name: 'Purple', value: 'purple', class: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 border-purple-200 dark:border-purple-800' },
 ];
 
+interface WidgetPosition {
+  x: number;
+  y: number;
+}
+
+interface WidgetSize {
+  width: number;
+  height: number;
+}
+
+interface LayoutConfig {
+  widgetPositions: Record<string, WidgetPosition>;
+  widgetSizes: Record<string, WidgetSize>;
+}
+
+interface DefaultLayouts {
+  [key: string]: LayoutConfig;
+}
+
 // Replace the component function with a more organized version
 export default function RecordingTab() {
   const { toast } = useToast()
@@ -92,6 +115,8 @@ export default function RecordingTab() {
   const [recordingState, setRecordingState] = useState<RecordingState>("idle")
   const [recordingTime, setRecordingTime] = useState(0)
   const [isMuted, setIsMuted] = useState(false)
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [analysisResult, setAnalysisResult] = useState<string>("")
 
   // Session data
   const [sessionName, setSessionName] = useState(() => {
@@ -108,7 +133,6 @@ export default function RecordingTab() {
   const [nextAnalysisTime, setNextAnalysisTime] = useState(0)
   const [wordCount, setWordCount] = useState(0)
   const [silenceStartTime, setSilenceStartTime] = useState<number | null>(null)
-  const [isAnalyzing, setIsAnalyzing] = useState(false)
 
   // Recording and transcription
   const [mediaRecorder, setMediaRecorder] = useState<MediaRecorder | null>(null)
@@ -143,12 +167,102 @@ export default function RecordingTab() {
   // Add state to track first-time user experience
   const [showWidgetHint, setShowWidgetHint] = useState(true)
 
+  // Add state for interval toggle
+  const [isIntervalEnabled, setIsIntervalEnabled] = useState(false)
+
   // Function to reset all widgets
   const resetAllWidgets = useCallback(() => {
     // Only reset if drag and drop is enabled
     if (!settings.enableDragDrop) return;
     
-    settings.resetWidgetPositions();
+    const layoutStore = useLayoutStore.getState();
+    const currentLayoutName = layoutStore.activeLayoutName;
+    
+    // Reset only the current layout by getting the default positions if it's a default layout
+    // or by resetting widget positions to organized positions if it's a custom layout
+    if (currentLayoutName === "Standard Layout" || currentLayoutName === "Compact View") {
+      // Get a fresh copy of the default layout
+      const defaultLayouts: DefaultLayouts = {
+        "Standard Layout": {
+          widgetPositions: {
+            "live-text": { x: 20, y: 20 },
+            "ai-insights": { x: 380, y: 20 },
+            "bookmarks": { x: 380, y: 400 },
+            "audio-controls": { x: 740, y: 400 },
+            "analysis-settings": { x: 20, y: 400 },
+            "tags": { x: 20, y: 740 },
+            "conversation-compass-widget": { x: 740, y: 20 },
+            "curiosity-engine-widget": { x: 1100, y: 20 }
+          },
+          widgetSizes: {
+            "live-text": { width: 340, height: 360 },
+            "ai-insights": { width: 340, height: 360 },
+            "bookmarks": { width: 340, height: 320 },
+            "audio-controls": { width: 340, height: 320 },
+            "analysis-settings": { width: 340, height: 320 },
+            "tags": { width: 340, height: 200 },
+            "conversation-compass-widget": { width: 340, height: 360 },
+            "curiosity-engine-widget": { width: 340, height: 360 }
+          }
+        },
+        "Compact View": {
+          widgetPositions: {
+            "live-text": { x: 20, y: 20 },
+            "ai-insights": { x: 380, y: 20 },
+            "bookmarks": { x: 20, y: 400 }
+          },
+          widgetSizes: {
+            "live-text": { width: 340, height: 360 },
+            "ai-insights": { width: 340, height: 360 },
+            "bookmarks": { width: 340, height: 320 }
+          }
+        }
+      };
+      
+      // Apply the default positions and sizes
+      const defaultLayout = defaultLayouts[currentLayoutName];
+      
+      // Update the layout with default positions and sizes
+      layoutStore.updateLayout(currentLayoutName, {
+        widgetPositions: { ...defaultLayout.widgetPositions },
+        widgetSizes: { ...defaultLayout.widgetSizes }
+      });
+    } else {
+      // For custom layouts, arrange widgets in a grid
+      const currentLayout = layoutStore.layouts[currentLayoutName];
+      if (!currentLayout) return;
+      
+      const visibleWidgets = [...currentLayout.visibleWidgets];
+      const newPositions: Record<string, WidgetPosition> = {};
+      const newSizes: Record<string, WidgetSize> = {};
+      
+      // Create a grid layout (3 columns)
+      const GRID_COL = 3;
+      const WIDGET_WIDTH = 340;
+      const WIDGET_HEIGHT = 320;
+      const MARGIN = 20;
+      
+      visibleWidgets.forEach((widgetId, index) => {
+        const col = index % GRID_COL;
+        const row = Math.floor(index / GRID_COL);
+        
+        newPositions[widgetId] = {
+          x: col * (WIDGET_WIDTH + MARGIN) + MARGIN,
+          y: row * (WIDGET_HEIGHT + MARGIN) + MARGIN
+        };
+        
+        newSizes[widgetId] = {
+          width: WIDGET_WIDTH,
+          height: WIDGET_HEIGHT
+        };
+      });
+      
+      // Update the layout with the grid positions
+      layoutStore.updateLayout(currentLayoutName, {
+        widgetPositions: newPositions,
+        widgetSizes: newSizes
+      });
+    }
     
     // Ensure the Live Text widget is visible after reset
     const liveTextWidgetId = "live-text";
@@ -158,11 +272,103 @@ export default function RecordingTab() {
     
     toast({
       title: "Layout Reset",
-      description: "All widgets have been reset to their default positions and minimized.",
+      description: `The "${layoutStore.activeLayoutName}" layout has been reset to organized positions.`,
     });
     // Show the widget hint again after reset
     setShowWidgetHint(true);
   }, [settings, toast]);
+
+  // Function to clear analysis results
+  const clearAnalysis = useCallback(() => {
+    setAnalysisResult("")
+    setIsAnalyzing(false)
+  }, [])
+
+  // Define processContentRef at the top level of the component
+  const processContentRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Move processContent definition before initializeTranscription
+  const processContent = useCallback(async () => {
+    if (!liveText.trim()) {
+      toast({
+        variant: "destructive",
+        title: "No Content",
+        description: "There is no text to analyze.",
+      });
+      return;
+    }
+
+    const activeProfile = templateStore.templates.find(
+      (t) => t.name === templateStore.activeTemplate
+    );
+
+    if (!activeProfile) {
+      toast({
+        variant: "destructive",
+        title: "Profile Error",
+        description: "No active analytics profile found.",
+      });
+      return;
+    }
+
+    try {
+      clearAnalysis();
+      setIsAnalyzing(true);
+
+      const response = await fetch("/api/requestify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          transcript: liveText,
+          template: {
+            system_prompt: activeProfile.system_prompt,
+            user_prompt: activeProfile.user_prompt,
+            template_prompt: activeProfile.template_prompt
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to process content");
+      }
+
+      const data = await response.json();
+      
+      // Update analysis result state
+      setAnalysisResult(data.text);
+
+      // Update session store with analysis results
+      sessionStore.updateAnalysisResults({
+        text: data.text,
+        structured: data.structured || {},
+        template_used: activeProfile.name,
+        timestamp: new Date().toISOString()
+      });
+
+      toast({
+        title: "Analysis Complete",
+        description: `Analysis completed using template: ${activeProfile.name}`,
+      });
+    } catch (error) {
+      console.error('Process content error:', error);
+      toast({
+        variant: "destructive",
+        title: "Processing Error",
+        description: error instanceof Error ? error.message : "An error occurred during processing.",
+      });
+      clearAnalysis();
+    } finally {
+      setIsAnalyzing(false);
+    }
+  }, [templateStore.templates, templateStore.activeTemplate, liveText, sessionStore, toast, clearAnalysis]);
+
+  // Update processContentRef whenever processContent changes
+  useEffect(() => {
+    processContentRef.current = processContent;
+  }, [processContent]);
 
   // Helper to convert Float32 samples to 16-bit PCM
   const floatTo16BitPCM = (input: Float32Array) => {
@@ -197,6 +403,7 @@ export default function RecordingTab() {
   // Profile Editor State
   const [isProfileEditorOpen, setIsProfileEditorOpen] = useState(false)
   const [isCreatingNewProfile, setIsCreatingNewProfile] = useState(false)
+  const [selectedProfileName, setSelectedProfileName] = useState<string | undefined>()
 
   // Import/Export file input ref
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -210,6 +417,35 @@ export default function RecordingTab() {
   useEffect(() => {
     templateStore.loadDefaultTemplates()
   }, [])
+
+  // Synchronize between settings store and layout store
+  useEffect(() => {
+    // This runs once on component mount to ensure layout system is properly initialized
+    const layoutStore = useLayoutStore.getState();
+    const currentLayout = layoutStore.layouts[layoutStore.activeLayoutName];
+    
+    // Initialize layout if needed with positions from settings
+    if (settings.enableDragDrop && currentLayout) {
+      // Save current layout state when positions or sizes change
+      const handlePositionChange = () => {
+        layoutStore.updateCurrentLayout();
+      };
+      
+      // No need for manual subscription since DraggableWidget already 
+      // updates the layout store directly when positions/sizes change
+      
+      // Set up a periodic save of the current layout
+      const saveInterval = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          layoutStore.updateCurrentLayout();
+        }
+      }, 5000); // Save every 5 seconds when tab is visible
+      
+      return () => {
+        clearInterval(saveInterval);
+      };
+    }
+  }, [settings.enableDragDrop]);
 
   // Ensure Live Text is always visible
   useEffect(() => {
@@ -228,7 +464,7 @@ export default function RecordingTab() {
       }
     }
   }, []);  // Run once on component mount
-  
+
   // Helper to format time in human readable format
   const formatTime = (seconds: number) => {
     const h = Math.floor(seconds / 3600)
@@ -342,11 +578,30 @@ export default function RecordingTab() {
       transcriber.on("transcript", (transcript: any) => {
         if (!transcript.text || transcript.message_type !== "FinalTranscript") return
         console.log(`AssemblyAI FinalTranscript:`, transcript.text)
-        // Append final transcript segment to live text
-        setLiveText((prev) => `${prev}${prev ? " " : ""}${transcript.text}`)
-        // Update word count
-        const words = transcript.text.split(/\s+/).length
-        setWordCount(words)
+        // Append final transcript segment to live text and update word count
+        setLiveText((prev) => {
+          const newText = `${prev}${prev ? " " : ""}${transcript.text}`;
+          // Update word count if needed
+          if (isIntervalEnabled && analysisInterval.startsWith("words-")) {
+            const wordLimit = Number.parseInt(analysisInterval.split("-")[1]);
+            const currentWordCount = newText.trim().split(/\s+/).length;
+            
+            if (currentWordCount >= wordLimit) {
+              // Schedule the analysis and text trimming for the next tick
+              setTimeout(() => {
+                if (processContentRef.current) {
+                  processContentRef.current();
+                  // Reset word count by trimming the text to keep only the remainder
+                  const words = newText.trim().split(/\s+/);
+                  const remainingWords = words.slice(wordLimit).join(" ");
+                  setLiveText(remainingWords);
+                }
+              }, 0);
+            }
+          }
+          return newText;
+        });
+        
         // Store segment in session
         sessionStore.addTranscriptSegment(transcript.text)
       })
@@ -376,7 +631,7 @@ export default function RecordingTab() {
         details: "Could not initialize transcription",
       })
     }
-  }, [handleError, toast, setIsConnecting, setIsTranscribing, setLiveText, setWordCount, sessionStore])
+  }, [handleError, toast, setIsConnecting, setIsTranscribing, setLiveText, sessionStore, isIntervalEnabled, analysisInterval])
 
   // Move handleSilenceDetection after stopRecording
   const stopRecording = useCallback(() => {
@@ -847,19 +1102,50 @@ export default function RecordingTab() {
     }, 1500)
   }, [isRecording, hasContent, templateStore, sessionStore, liveText, toast, resetAnalysisTimer])
 
-  const updateAnalysisTimer = useCallback(() => {
-    if (!isRecording) return
+  // Add effect to track word count changes - this is now our backup check
+  useEffect(() => {
+    if (!isIntervalEnabled || !isRecording) return;
 
-    if (analysisInterval.startsWith("time-")) {
-      const seconds = Number.parseInt(analysisInterval.split("-")[1])
-      if (nextAnalysisTime <= 0) {
-        triggerManualAnalysis()
-        setNextAnalysisTime(seconds)
-      } else {
-        setNextAnalysisTime((prev) => prev - 1)
+    if (analysisInterval.startsWith("words-")) {
+      const wordLimit = Number.parseInt(analysisInterval.split("-")[1]);
+      const currentWordCount = liveText.trim().split(/\s+/).length;
+
+      if (currentWordCount >= wordLimit && processContentRef.current) {
+        processContentRef.current();
+        // Reset word count by trimming the text to keep only the remainder
+        const words = liveText.trim().split(/\s+/);
+        const remainingWords = words.slice(wordLimit).join(" ");
+        setLiveText(remainingWords);
       }
     }
-  }, [isRecording, analysisInterval, nextAnalysisTime, triggerManualAnalysis])
+  }, [liveText, isIntervalEnabled, isRecording, analysisInterval]);
+
+  // Modify updateAnalysisTimer to handle only time-based intervals
+const isAnalyzingRef = useRef(false)
+
+const updateAnalysisTimer = useCallback(() => {
+  if (!isRecording || !isIntervalEnabled) return;
+
+  if (analysisInterval.startsWith("time-")) {
+    const seconds = Number.parseInt(analysisInterval.split("-")[1])
+    if (isNaN(seconds)) return;
+
+    if (nextAnalysisTime <= 0) {
+      if (!isAnalyzingRef.current) {
+        isAnalyzingRef.current = true
+
+        processContent().finally(() => {
+          isAnalyzingRef.current = false
+        })
+
+        setNextAnalysisTime(seconds)
+      }
+    } else {
+      setNextAnalysisTime((prev) => prev - 1)
+    }
+  }
+}, [isRecording, isIntervalEnabled, analysisInterval, nextAnalysisTime, processContent])
+
 
   // Session management functions
   const saveSession = useCallback(() => {
@@ -1077,13 +1363,23 @@ export default function RecordingTab() {
           profiles.forEach((profile) => {
             // Make sure we don't overwrite built-in profiles
             if (!profile.name.startsWith("*")) {
-              // Check if profile with this name already exists
-              const existingProfile = templateStore.templates.find((p) => p.name === profile.name)
-              if (existingProfile) {
-                // Add a suffix to avoid name conflicts
-                profile.name = `${profile.name} (Imported)`
+              // Add version if missing
+              if (!profile.version) {
+                profile.version = 2
               }
-
+              
+              // Add required fields if missing
+              if (!profile.visualization) {
+                profile.visualization = {
+                  default_layout: "radial",
+                  node_color_scheme: "default",
+                  highlight_decisions: true,
+                  highlight_questions: true,
+                  expand_level: 1,
+                }
+              }
+              
+              // Add the profile
               templateStore.addTemplate(profile)
               importCount++
             }
@@ -1223,7 +1519,7 @@ export default function RecordingTab() {
         </div>
       )}
 
-      {/* First-time widget usage hint - only show when drag and drop is enabled */}
+      {/* Show first-time widget usage hint - only show when drag and drop is enabled */}
       {showWidgetHint && settings.enableDragDrop && settings.minimizedWidgets.length > 0 && (
         <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-3 rounded-md flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -1233,15 +1529,6 @@ export default function RecordingTab() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button 
-              variant="outline" 
-              size="sm" 
-              onClick={resetAllWidgets}
-              className="h-8"
-            >
-              <RefreshCw className="h-3 w-3 mr-1" />
-              Reset Layout
-            </Button>
             <Button 
               variant="ghost" 
               size="sm" 
@@ -1302,17 +1589,26 @@ export default function RecordingTab() {
             </div>
           </div>
 
-          {/* Quick Actions */}
-          {/* <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={saveSession}>
-              <Save className="h-4 w-4 mr-2" />
-              Save Session
+          {/* Layout Controls - More visible now */}
+          <div className="flex flex-col mt-2 sm:mt-0">
+            <div className="text-xs font-medium text-blue-600 dark:text-blue-400 mb-1 flex items-center gap-1">
+              <Move className="h-3 w-3" /> Layout Controls
+            </div>
+            <div className="flex items-center gap-2 bg-blue-50 dark:bg-blue-900/20 p-2 rounded-md border border-blue-200 dark:border-blue-800">
+              <LayoutManager />
+              <WidgetPicker />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={resetAllWidgets}
+                className="h-8 flex items-center gap-1 bg-white dark:bg-slate-800"
+                title="Reset the current layout to organized positions without affecting saved layouts"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                <span>Reset Layout</span>
             </Button>
-            <Button variant="outline" size="sm" onClick={newSession}>
-              <RefreshCw className="h-4 w-4 mr-2" />
-              New Session
-            </Button>
-          </div> */}
+            </div>
+          </div>
         </div>
 
         {/* Control Panels */}
@@ -1324,18 +1620,18 @@ export default function RecordingTab() {
                 <div className="flex items-center gap-2">
                   {/* Record/Pause/Resume button */}
                   <div className="relative">
-                    <Button
+                  <Button
                       variant={recordingState === "idle" ? "destructive" : recordingState === "recording" ? "default" : "default"}
-                      size="icon"
-                      onClick={() => {
-                        if (recordingState === "idle") {
-                          startRecording()
-                        } else if (recordingState === "recording") {
-                          pauseRecording()
-                        } else if (recordingState === "paused") {
-                          resumeRecording()
-                        }
-                      }}
+                    size="icon"
+                    onClick={() => {
+                      if (recordingState === "idle") {
+                        startRecording()
+                      } else if (recordingState === "recording") {
+                        pauseRecording()
+                      } else if (recordingState === "paused") {
+                        resumeRecording()
+                      }
+                    }}
                       className={`h-10 w-10 rounded-full relative ${
                         recordingState === "recording" ? "bg-green-500 hover:bg-green-600 text-white border-green-400" : ""
                       }`}
@@ -1346,18 +1642,18 @@ export default function RecordingTab() {
                             ? "Pause recording" 
                             : "Resume recording"
                       }
-                      disabled={isConnecting}
-                    >
-                      {isConnecting ? (
-                        <Loader2 className="h-5 w-5 animate-spin" />
+                    disabled={isConnecting}
+                  >
+                    {isConnecting ? (
+                      <Loader2 className="h-5 w-5 animate-spin" />
                       ) : recordingState === "recording" ? (
-                        <Pause className="h-5 w-5" />
+                      <Pause className="h-5 w-5" />
                       ) : recordingState === "paused" ? (
-                        <Play className="h-5 w-5" />
+                      <Play className="h-5 w-5" />
                       ) : (
                         <Circle className="h-5 w-5 fill-current" />
-                      )}
-                    </Button>
+                    )}
+                  </Button>
                     {/* Larger blinking red dot indicator */}
                     {recordingState === "recording" && (
                       <div className="absolute -top-2 -right-2 w-5 h-5">
@@ -1368,15 +1664,15 @@ export default function RecordingTab() {
 
                   {/* Stop button - only show when recording or paused */}
                   {(recordingState === "recording" || recordingState === "paused") && (
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={stopRecording}
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={stopRecording}
                       className="h-10 w-10 rounded-full border-red-200 hover:border-red-300 hover:bg-red-50"
-                      aria-label="Stop recording"
-                    >
+                    aria-label="Stop recording"
+                  >
                       <Square className="h-5 w-5 text-red-500" />
-                    </Button>
+                  </Button>
                   )}
 
                   {/* Mute button */}
@@ -1427,14 +1723,16 @@ export default function RecordingTab() {
                       {recordingState === "recording" ? "Recording" : "Paused"}
                     </span>
                   )}
-                  <div className="text-xl font-mono">{formatTime(recordingTime)}</div>
+                <div className="text-xl font-mono">{formatTime(recordingTime)}</div>
                 </div>
 
                 {/* Analysis timer */}
-                <div className="flex flex-col items-end">
-                  <div className="text-sm text-muted-foreground">Next analysis in:</div>
-                  <div className="text-md font-mono">{formatTime(nextAnalysisTime)}</div>
-                </div>
+                <AnalysisTimer
+                  nextAnalysisTime={nextAnalysisTime}
+                  isEnabled={isIntervalEnabled}
+                  interval={analysisInterval}
+                  onComplete={processContent}
+                />
 
                 <div className="w-24 h-10">
                   <AudioVisualizer isActive={isRecording && !isMuted} />
@@ -1470,27 +1768,24 @@ export default function RecordingTab() {
                       <SelectValue placeholder="Select interval" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="manual">Manual (F12)</SelectItem>
                       <SelectGroup>
-                        <SelectLabel>Silence</SelectLabel>
-                        <SelectItem value="silence-5">5 seconds silence</SelectItem>
-                        <SelectItem value="silence-15">15 seconds silence</SelectItem>
-                        <SelectItem value="silence-30">30 seconds silence</SelectItem>
+                        <SelectLabel>Time</SelectLabel>
+                        <SelectItem value="time-60">1 minute</SelectItem>
+                        <SelectItem value="time-120">2 minutes</SelectItem>
+                        <SelectItem value="time-300">5 minutes</SelectItem>
+                        <SelectItem value="time-600">10 minutes</SelectItem>
                       </SelectGroup>
                       <SelectGroup>
                         <SelectLabel>Word Count</SelectLabel>
-                        <SelectItem value="words-10">10 words</SelectItem>
-                        <SelectItem value="words-50">50 words</SelectItem>
+                        <SelectItem value="words-75">75 words</SelectItem>
                         <SelectItem value="words-100">100 words</SelectItem>
                         <SelectItem value="words-200">200 words</SelectItem>
                         <SelectItem value="words-500">500 words</SelectItem>
                       </SelectGroup>
                       <SelectGroup>
-                        <SelectLabel>Time</SelectLabel>
-                        <SelectItem value="time-10">10 seconds</SelectItem>
-                        <SelectItem value="time-45">45 seconds</SelectItem>
-                        <SelectItem value="time-300">5 minutes</SelectItem>
-                        <SelectItem value="time-600">10 minutes</SelectItem>
+                        <SelectLabel>Silence</SelectLabel>
+                        <SelectItem value="silence-15">15 seconds silence</SelectItem>
+                        <SelectItem value="silence-30">30 seconds silence</SelectItem>
                       </SelectGroup>
                     </SelectContent>
                   </Select>
@@ -1517,9 +1812,15 @@ export default function RecordingTab() {
                 <div className="flex flex-col w-full">
                   <div className="flex items-center gap-2 mb-1">
                     <Label className="text-sm font-medium">Analytics Profile:</Label>
-                    <div className="text-xs text-muted-foreground ml-auto">
-                      {templateStore.templates.find((t) => t.name === templateStore.activeTemplate)?.description ||
-                        "Select a profile"}
+                    <div className="flex items-center gap-4 ml-auto">
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          id="interval-toggle"
+                          checked={isIntervalEnabled}
+                          onCheckedChange={setIsIntervalEnabled}
+                        />
+                        <Label htmlFor="interval-toggle" className="text-sm">Auto Analysis</Label>
+                      </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1529,183 +1830,105 @@ export default function RecordingTab() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectGroup>
-                          <SelectLabel>Built-in Profiles</SelectLabel>
+                          <SelectLabel className="font-semibold text-primary">Built-in Profiles</SelectLabel>
                           {templateStore.templates
                             .filter((template) => template.name.startsWith("*"))
                             .map((template) => (
                               <SelectItem key={template.name} value={template.name}>
-                                {template.name.substring(1)}
+                                <div className="flex items-center gap-2">
+                                  <span>{template.name.substring(1)}</span>
+                                  <span className="text-xs text-muted-foreground">(Built-in)</span>
+                                </div>
                               </SelectItem>
                             ))}
                         </SelectGroup>
                         <SelectGroup>
-                          <SelectLabel>Custom Profiles</SelectLabel>
+                          <SelectLabel className="font-semibold text-primary">Custom Profiles</SelectLabel>
                           {templateStore.templates
                             .filter((template) => !template.name.startsWith("*"))
                             .map((template) => (
                               <SelectItem key={template.name} value={template.name}>
-                                {template.name}
+                                <div className="flex items-center gap-2">
+                                  <span>{template.name}</span>
+                                  <span className="text-xs px-1.5 py-0.5 rounded-full bg-primary/10 text-primary">Custom</span>
+                                </div>
                               </SelectItem>
                             ))}
+                          {templateStore.templates.filter((t) => !t.name.startsWith("*")).length === 0 && (
+                            <div className="px-2 py-1.5 text-sm text-muted-foreground italic">
+                              No custom profiles yet
+                            </div>
+                          )}
                         </SelectGroup>
                       </SelectContent>
                     </Select>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => {
-                        const activeTemplate = templateStore.templates.find(
-                          (t) => t.name === templateStore.activeTemplate,
-                        )
-
-                        if (!activeTemplate) {
-                          toast({
-                            variant: "destructive",
-                            title: "Profile Error",
-                            description: "Could not find the selected analytics profile.",
-                          })
-                          return
-                        }
-
-                        // Open the ProfileEditorDialog
-                        setIsProfileEditorOpen(true)
-                      }}
-                    >
-                      <Edit className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => {
-                        const currentTemplate = templateStore.templates.find(
-                          (t) => t.name === templateStore.activeTemplate,
-                        )
-
-                        if (!currentTemplate) {
-                          toast({
-                            variant: "destructive",
-                            title: "Profile Error",
-                            description: "Could not find the selected analytics profile.",
-                          })
-                          return
-                        }
-
-                        // Create a duplicate of the current profile
-                        const newTemplate = {
-                          ...currentTemplate,
-                          name: `Copy of ${currentTemplate.name.startsWith("*") ? currentTemplate.name.substring(1) : currentTemplate.name}`,
-                          description: `Custom copy of ${currentTemplate.description}`,
-                        }
-
-                        templateStore.addTemplate(newTemplate)
-                        templateStore.setActiveTemplate(newTemplate.name)
-
-                        toast({
-                          title: "Profile Duplicated",
-                          description: `Created new analytics profile "${newTemplate.name}"`,
-                        })
-                      }}
-                    >
-                      <Copy className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => {
-                        setIsCreatingNewProfile(true)
-                        setIsProfileEditorOpen(true)
-                      }}
-                      title="Create new profile"
-                    >
-                      <Plus className="h-4 w-4" />
-                    </Button>
                     <div className="flex gap-1">
-                      <Button variant="outline" size="icon" onClick={importProfiles} title="Import profiles">
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => {
+                          setIsCreatingNewProfile(true)
+                        setIsProfileEditorOpen(true)
+                      }}
+                        title="Create new profile"
+                    >
+                        <Plus className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => {
+                          const activeProfile = templateStore.templates.find(
+                            (t) => t.name === templateStore.activeTemplate
+                          )
+                          if (activeProfile) {
+                            setSelectedProfileName(activeProfile.name)
+                            setIsCreatingNewProfile(false)
+                            setIsProfileEditorOpen(true)
+                          }
+                        }}
+                        title="Edit profile"
+                      >
+                        <Edit className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                        onClick={exportProfiles}
+                        title="Export profiles"
+                      >
+                        <DownloadIcon className="h-4 w-4" />
+                    </Button>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={importProfiles}
+                        title="Import profiles"
+                      >
                         <Upload className="h-4 w-4" />
                       </Button>
-                      <Button variant="outline" size="icon" onClick={exportProfiles} title="Export profiles">
-                        <DownloadIcon className="h-4 w-4" />
-                      </Button>
+                      {/* Hidden file input for importing */}
                       <input
                         type="file"
                         ref={fileInputRef}
-                        onChange={handleFileChange}
-                        accept=".json"
                         className="hidden"
+                        accept=".json"
+                        onChange={handleFileChange}
                       />
                     </div>
                   </div>
                 </div>
               </div>
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <Button
                     variant="outline"
                     size="sm"
                     disabled={!hasContent}
-                    onClick={() => {
-                      toast({
-                        title: "Processing Content",
-                        description: "Your content is being processed...",
-                      })
-                    }}
+                    onClick={processContent}
                   >
                     <Save className="h-4 w-4 mr-2" />
                     Process
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!hasContent}
-                    onClick={() => {
-                      toast({
-                        title: "Full Analysis",
-                        description: "Running full analysis on your content...",
-                      })
-                    }}
-                  >
-                    <Save className="h-4 w-4 mr-2" />
-                    Full Analysis
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={!hasContent}
-                    onClick={() => {
-                      toast({
-                        title: "Deep Analysis",
-                        description: "Running deep analysis on your content...",
-                      })
-                    }}
-                  >
-                    <Save className="h-4 w-4 mr-2" />
-                    Deep Analysis
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => {
-                      toast({
-                        title: "Refreshing Analysis",
-                        description: "Analysis tools are being refreshed.",
-                      })
-                    }}
-                  >
-                    <RefreshCw className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => {
-                      toast({
-                        title: "Analysis Cleared",
-                        description: "All analysis results have been cleared.",
-                      })
-                    }}
-                  >
-                    <X className="h-4 w-4" />
                   </Button>
                 </div>
               </div>
@@ -1723,7 +1946,8 @@ export default function RecordingTab() {
             <DraggableWidget
               id="live-text"
               title="Live Text"
-              defaultPosition={{ x: 0, y: 0 }}
+              defaultPosition={{ x: 20, y: 20 }}
+              defaultSize={{ width: 300, height: 320 }}
               className="w-full md:w-auto"
               // Force visibility for this critical widget
               forceVisible={true}
@@ -1770,12 +1994,37 @@ export default function RecordingTab() {
                     {liveText
                       .split(".")
                       .filter(Boolean)
-                      .map((sentence, idx) => (
-                        <div key={idx} className="flex items-start gap-2">
-                          <span className="text-xs text-muted-foreground font-mono mt-1">{formatTime(idx * 5)}</span>
-                          <p>{sentence.trim()}.</p>
-                        </div>
-                      ))}
+                      .map((sentence, idx) => {
+                        // Check if this is a Curiosity Engine entry
+                        if (sentence.includes("[Curiosity")) {
+                          // Split the text by our special markers
+                          const parts = sentence.split("§§");
+                          if (parts.length >= 3) {
+                            return (
+                              <div key={idx} className="flex items-start gap-2">
+                                <span className="text-xs text-muted-foreground font-mono mt-1">{formatTime(idx * 5)}</span>
+                                <div>
+                                  {parts.map((part, partIdx) => {
+                                    // Even indices are regular text, odd indices are to be colored
+                                    return partIdx % 2 === 0 ? (
+                                      <span key={partIdx}>{part}</span>
+                                    ) : (
+                                      <span key={partIdx} className="text-green-600 dark:text-green-400">{part}</span>
+                                    );
+                                  })}
+                                  <span>.</span>
+            </div>
+        </div>
+                            );
+                          }
+                        }
+                        return (
+                          <div key={idx} className="flex items-start gap-2">
+                            <span className="text-xs text-muted-foreground font-mono mt-1">{formatTime(idx * 5)}</span>
+                            <p>{sentence.trim()}.</p>
+      </div>
+                        );
+                      })}
                   </div>
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
@@ -1788,7 +2037,7 @@ export default function RecordingTab() {
                         <p className="text-sm mt-2">Press the play button or spacebar to begin</p>
                       </>
                     )}
-                  </div>
+      </div>
                 )}
               </div>
             </DraggableWidget>
@@ -1797,7 +2046,8 @@ export default function RecordingTab() {
             <DraggableWidget
               id="ai-insights"
               title="AI Insights"
-              defaultPosition={{ x: 0, y: 0 }}
+              defaultPosition={{ x: 380, y: 20 }}
+              defaultSize={{ width: 340, height: 360 }}
               className="w-full md:w-auto"
             >
               <Tabs defaultValue="insights">
@@ -1811,16 +2061,29 @@ export default function RecordingTab() {
 
                 <TabsContent value="insights" className="p-4 h-[400px] overflow-y-auto">
                   {hasContent ? (
-                    <AIAnalysisPanel transcript={liveText} />
+                    <AIAnalysisPanel 
+                      transcript={liveText} 
+                      analysisResult={analysisResult}
+                      isAnalyzing={isAnalyzing}
+                    />
                   ) : (
                     <div className="h-full flex items-center justify-center text-muted-foreground">
-                      No insights available yet
+                      <div className="text-center">
+                        <p>No insights available yet</p>
+                        <p className="text-sm mt-2">Start recording or enter text to analyze</p>
+                      </div>
                     </div>
                   )}
                 </TabsContent>
 
                 <TabsContent value="curiosity" className="h-[400px] overflow-y-auto">
-                  <CuriosityEngine hasContent={hasContent} transcript={liveText} />
+                  <CuriosityEngine 
+                    hasContent={hasContent} 
+                    transcript={liveText} 
+                    onAnswerSubmitted={(text) => {
+                      setLiveText(prev => `${prev}${prev ? " " : ""}${text}`)
+                    }}
+                  />
                 </TabsContent>
 
                 <TabsContent value="compass" className="h-[400px] overflow-y-auto">
@@ -1837,102 +2100,140 @@ export default function RecordingTab() {
                 <span className="font-medium text-sm">Live Text</span>
               </div>
               <div className="p-2 flex items-center justify-between border-b">
-                <div className="flex items-center gap-2">
-                  <Select defaultValue="default">
-                    <SelectTrigger className="w-[100px] h-8">
-                      <SelectValue placeholder="Font" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="default">Default</SelectItem>
-                      <SelectItem value="large">Large</SelectItem>
-                      <SelectItem value="small">Small</SelectItem>
-                    </SelectContent>
-                  </Select>
+            <div className="flex items-center gap-2">
+              <Select defaultValue="default">
+                <SelectTrigger className="w-[100px] h-8">
+                  <SelectValue placeholder="Font" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="default">Default</SelectItem>
+                  <SelectItem value="large">Large</SelectItem>
+                  <SelectItem value="small">Small</SelectItem>
+                </SelectContent>
+              </Select>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={copyToClipboard}
-                    disabled={!hasContent}
-                    aria-label="Copy to clipboard"
-                  >
-                    <Copy className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={saveTranscript}
-                    disabled={!hasContent}
-                    aria-label="Download transcript"
-                  >
-                    <Download className="h-4 w-4" />
-                  </Button>
-                </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={copyToClipboard}
+                disabled={!hasContent}
+                aria-label="Copy to clipboard"
+              >
+                <Copy className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={saveTranscript}
+                disabled={!hasContent}
+                aria-label="Download transcript"
+              >
+                <Download className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+          <div className="p-4 h-[400px] overflow-y-auto">
+            {liveText ? (
+              <div className="space-y-4">
+                {liveText
+                  .split(".")
+                  .filter(Boolean)
+                  .map((sentence, idx) => {
+                    // Check if this is a Curiosity Engine entry
+                    if (sentence.includes("[Curiosity")) {
+                      // Split the text by our special markers
+                      const parts = sentence.split("§§");
+                      if (parts.length >= 3) {
+                        return (
+                          <div key={idx} className="flex items-start gap-2">
+                            <span className="text-xs text-muted-foreground font-mono mt-1">{formatTime(idx * 5)}</span>
+                            <div>
+                              {parts.map((part, partIdx) => {
+                                // Even indices are regular text, odd indices are to be colored
+                                return partIdx % 2 === 0 ? (
+                                  <span key={partIdx}>{part}</span>
+                                ) : (
+                                  <span key={partIdx} className="text-green-600 dark:text-green-400">{part}</span>
+                                );
+                              })}
+                              <span>.</span>
+                            </div>
+                          </div>
+                        );
+                      }
+                    }
+                    return (
+                    <div key={idx} className="flex items-start gap-2">
+                      <span className="text-xs text-muted-foreground font-mono mt-1">{formatTime(idx * 5)}</span>
+                      <p>{sentence.trim()}.</p>
+                    </div>
+                    );
+                  })}
               </div>
-              <div className="p-4 h-[400px] overflow-y-auto">
-                {liveText ? (
-                  <div className="space-y-4">
-                    {liveText
-                      .split(".")
-                      .filter(Boolean)
-                      .map((sentence, idx) => (
-                        <div key={idx} className="flex items-start gap-2">
-                          <span className="text-xs text-muted-foreground font-mono mt-1">{formatTime(idx * 5)}</span>
-                          <p>{sentence.trim()}.</p>
-                        </div>
-                      ))}
-                  </div>
+            ) : (
+              <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                {isRecording ? (
+                  "Waiting for speech..."
                 ) : (
-                  <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
-                    {isRecording ? (
-                      "Waiting for speech..."
-                    ) : (
-                      <>
-                        <FileText className="h-12 w-12 mb-4 opacity-20" />
-                        <p>Start recording to see transcription</p>
-                        <p className="text-sm mt-2">Press the play button or spacebar to begin</p>
-                      </>
-                    )}
-                  </div>
+                  <>
+                    <FileText className="h-12 w-12 mb-4 opacity-20" />
+                    <p>Start recording to see transcription</p>
+                    <p className="text-sm mt-2">Press the play button or spacebar to begin</p>
+                  </>
                 )}
               </div>
-            </Card>
+            )}
+          </div>
+        </Card>
 
             <Card className="overflow-hidden shadow-md">
               <div className="flex items-center justify-between p-3 bg-gradient-to-r from-accent/40 to-muted border-b">
                 <span className="font-medium text-sm">AI Insights</span>
               </div>
-              <Tabs defaultValue="insights">
+          <Tabs defaultValue="insights">
                 <div className="bg-muted p-2 border-b">
-                  <TabsList className="grid w-full grid-cols-3">
-                    <TabsTrigger value="insights">AI Insights</TabsTrigger>
-                    <TabsTrigger value="curiosity">Curiosity Engine</TabsTrigger>
-                    <TabsTrigger value="compass">Conversation Compass</TabsTrigger>
-                  </TabsList>
+              <TabsList className="grid w-full grid-cols-3">
+                <TabsTrigger value="insights">AI Insights</TabsTrigger>
+                <TabsTrigger value="curiosity">Curiosity Engine</TabsTrigger>
+                <TabsTrigger value="compass">Conversation Compass</TabsTrigger>
+              </TabsList>
+            </div>
+
+            <TabsContent value="insights" className="p-4 h-[400px] overflow-y-auto">
+              {hasContent ? (
+                <AIAnalysisPanel 
+                  transcript={liveText} 
+                  analysisResult={analysisResult}
+                  isAnalyzing={isAnalyzing}
+                />
+              ) : (
+                <div className="h-full flex items-center justify-center text-muted-foreground">
+                  <div className="text-center">
+                    <p>No insights available yet</p>
+                    <p className="text-sm mt-2">Start recording or enter text to analyze</p>
+                  </div>
                 </div>
+              )}
+            </TabsContent>
 
-                <TabsContent value="insights" className="p-4 h-[400px] overflow-y-auto">
-                  {hasContent ? (
-                    <AIAnalysisPanel transcript={liveText} />
-                  ) : (
-                    <div className="h-full flex items-center justify-center text-muted-foreground">
-                      No insights available yet
-                    </div>
-                  )}
-                </TabsContent>
+            <TabsContent value="curiosity" className="h-[400px] overflow-y-auto">
+              <CuriosityEngine 
+                hasContent={hasContent} 
+                transcript={liveText} 
+                onAnswerSubmitted={(text) => {
+                  setLiveText(prev => `${prev}${prev ? " " : ""}${text}`)
+                }}
+              />
+            </TabsContent>
 
-                <TabsContent value="curiosity" className="h-[400px] overflow-y-auto">
-                  <CuriosityEngine hasContent={hasContent} transcript={liveText} />
-                </TabsContent>
-
-                <TabsContent value="compass" className="h-[400px] overflow-y-auto">
-                  <ConversationCompass hasContent={hasContent} />
-                </TabsContent>
-              </Tabs>
-            </Card>
+            <TabsContent value="compass" className="h-[400px] overflow-y-auto">
+              <ConversationCompass hasContent={hasContent} />
+            </TabsContent>
+          </Tabs>
+        </Card>
           </>
         )}
       </div>
@@ -1950,87 +2251,76 @@ export default function RecordingTab() {
             <Save className="h-4 w-4 mr-2" />
             Save Transcript
           </Button>
-          <Button
-            variant="outline"
-            disabled={!hasContent}
-            onClick={() => {
-              toast({
-                title: "Analysis Saved",
-                description: "Your analysis has been saved successfully.",
-              })
-            }}
-          >
-            <Save className="h-4 w-4 mr-2" />
-            Save Analysis
-          </Button>
+         
         </div>
       </div>
 
       {/* Only render these additional widgets when drag and drop is enabled */}
       {settings.enableDragDrop && (
         <>
-          {/* Bookmark Panel */}
+      {/* Bookmark Panel */}
           <DraggableWidget
             id="bookmarks"
             title="Bookmarks"
-            defaultPosition={{ x: 0, y: 0 }}
+            defaultPosition={{ x: 380, y: 400 }}
+            defaultSize={{ width: 340, height: 320 }}
             className="w-full"
           >
             <div className="p-4">
-              <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              toast({
+                title: "Voice Commands",
+                description: "Voice command functionality will be available in a future update.",
+              })
+            }}
+          >
+            <MessageSquare className="h-4 w-4 mr-2" />
+            Voice Commands
+          </Button>
+        </div>
+        <div className="flex items-center gap-2 mb-4">
+          <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(false)}>
+            <Bookmark className="h-4 w-4 mr-2" />
+            Quick Bookmark (F8)
+          </Button>
+          <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(true)}>
+            <Bookmark className="h-4 w-4 mr-2" />
+            Named Bookmark (F9)
+          </Button>
+          <Button variant="outline" disabled={!isRecording} onClick={triggerManualAnalysis}>
+            <HelpCircle className="h-4 w-4 mr-2" />
+            Full Analysis (F10)
+          </Button>
+      </div>
+
+        {bookmarks.length > 0 ? (
+          <div className="space-y-2">
+            {bookmarks.map((bookmark, index) => (
+              <div key={index} className="flex items-center justify-between p-2 border rounded-md">
+                <div className="flex items-center gap-2">
+                  <Bookmark className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium">{bookmark.name}</span>
+                  <span className="text-xs text-muted-foreground">{formatTime(bookmark.time)}</span>
+                </div>
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
                   onClick={() => {
-                    toast({
-                      title: "Voice Commands",
-                      description: "Voice command functionality will be available in a future update.",
-                    })
+                    setBookmarks(bookmarks.filter((_, i) => i !== index))
                   }}
                 >
-                  <MessageSquare className="h-4 w-4 mr-2" />
-                  Voice Commands
+                  <X className="h-4 w-4" />
                 </Button>
               </div>
-              <div className="flex items-center gap-2 mb-4">
-                <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(false)}>
-                  <Bookmark className="h-4 w-4 mr-2" />
-                  Quick Bookmark (F8)
-                </Button>
-                <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(true)}>
-                  <Bookmark className="h-4 w-4 mr-2" />
-                  Named Bookmark (F9)
-                </Button>
-                <Button variant="outline" disabled={!isRecording} onClick={triggerManualAnalysis}>
-                  <HelpCircle className="h-4 w-4 mr-2" />
-                  Full Analysis (F10)
-                </Button>
-              </div>
-
-              {bookmarks.length > 0 ? (
-                <div className="space-y-2">
-                  {bookmarks.map((bookmark, index) => (
-                    <div key={index} className="flex items-center justify-between p-2 border rounded-md">
-                      <div className="flex items-center gap-2">
-                        <Bookmark className="h-4 w-4 text-primary" />
-                        <span className="text-sm font-medium">{bookmark.name}</span>
-                        <span className="text-xs text-muted-foreground">{formatTime(bookmark.time)}</span>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setBookmarks(bookmarks.filter((_, i) => i !== index))
-                        }}
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center text-muted-foreground py-4">No bookmarks yet</div>
-              )}
+            ))}
+          </div>
+        ) : (
+          <div className="text-center text-muted-foreground py-4">No bookmarks yet</div>
+        )}
             </div>
           </DraggableWidget>
 
@@ -2038,7 +2328,8 @@ export default function RecordingTab() {
           <DraggableWidget
             id="audio-controls"
             title="Audio Controls"
-            defaultPosition={{ x: 0, y: 0 }}
+            defaultPosition={{ x: 740, y: 400 }}
+            defaultSize={{ width: 340, height: 320 }}
             className="w-full"
           >
             <div className="p-4">
@@ -2055,70 +2346,58 @@ export default function RecordingTab() {
           <DraggableWidget
             id="analysis-settings"
             title="Analysis Settings"
-            defaultPosition={{ x: 0, y: 0 }}
+            defaultPosition={{ x: 20, y: 400 }}
+            defaultSize={{ width: 340, height: 320 }}
             className="w-full"
           >
             <div className="p-4">
               <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between mb-2">
+                  <Label className="text-sm font-medium">Auto Analysis</Label>
+                  <Switch
+                    id="interval-toggle-widget"
+                    checked={isIntervalEnabled}
+                    onCheckedChange={setIsIntervalEnabled}
+                  />
+                </div>
                 <div className="space-y-2">
                   <Label htmlFor="analysis-interval">Analysis Interval</Label>
                   <Select
                     value={analysisInterval}
                     onValueChange={setAnalysisInterval}
+                    disabled={!isIntervalEnabled}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select interval" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="manual">Manual Only</SelectItem>
-                      <SelectItem value="time-30">Every 30 seconds</SelectItem>
-                      <SelectItem value="time-60">Every minute</SelectItem>
-                      <SelectItem value="time-300">Every 5 minutes</SelectItem>
+                      <SelectGroup>
+                        <SelectLabel>Time</SelectLabel>
+                        <SelectItem value="time-60">1 minute</SelectItem>
+                        <SelectItem value="time-120">2 minutes</SelectItem>
+                        <SelectItem value="time-300">5 minutes</SelectItem>
+                        <SelectItem value="time-600">10 minutes</SelectItem>
+                      </SelectGroup>
+                      <SelectGroup>
+                        <SelectLabel>Word Count</SelectLabel>
+                        <SelectItem value="words-75">75 words</SelectItem>
+                        <SelectItem value="words-100">100 words</SelectItem>
+                        <SelectItem value="words-200">200 words</SelectItem>
+                        <SelectItem value="words-500">500 words</SelectItem>
+                      </SelectGroup>
+                      <SelectGroup>
+                        <SelectLabel>Silence</SelectLabel>
+                        <SelectItem value="silence-15">15 seconds silence</SelectItem>
+                        <SelectItem value="silence-30">30 seconds silence</SelectItem>
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="profile-select">Analytics Profile</Label>
-                  <div className="flex items-center gap-2">
-                    <Select value={templateStore.activeTemplate} onValueChange={templateStore.setActiveTemplate}>
-                      <SelectTrigger className="w-full">
-                        <SelectValue placeholder="Select Analytics Profile" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectLabel>Built-in Profiles</SelectLabel>
-                          {templateStore.templates
-                            .filter((template) => template.name.startsWith("*"))
-                            .map((template) => (
-                              <SelectItem key={template.name} value={template.name}>
-                                {template.name.substring(1)}
-                              </SelectItem>
-                            ))}
-                        </SelectGroup>
-                        <SelectGroup>
-                          <SelectLabel>Custom Profiles</SelectLabel>
-                          {templateStore.templates
-                            .filter((template) => !template.name.startsWith("*"))
-                            .map((template) => (
-                              <SelectItem key={template.name} value={template.name}>
-                                {template.name}
-                              </SelectItem>
-                            ))}
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      onClick={() => {
-                        setIsProfileEditorOpen(true)
-                      }}
-                      title="Edit profile"
-                    >
-                      <Edit className="h-4 w-4" />
-                    </Button>
+                {isIntervalEnabled && (
+                  <div className="text-sm text-muted-foreground">
+                    Next analysis in: {formatTime(nextAnalysisTime)}
                   </div>
-                </div>
+                )}
               </div>
             </div>
           </DraggableWidget>
@@ -2127,11 +2406,12 @@ export default function RecordingTab() {
           <DraggableWidget
             id="tags"
             title="Tags"
-            defaultPosition={{ x: 0, y: 0 }}
+            defaultPosition={{ x: 20, y: 740 }}
+            defaultSize={{ width: 340, height: 200 }}
             className="w-full"
           >
             <div className="p-4">
-              <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4">
                 <h3 className="font-medium">Conversation Tags</h3>
                 <Button variant="outline" size="sm" onClick={() => setIsTagEditorOpen(true)}>
                   <TagIcon className="h-4 w-4 mr-2" />
@@ -2162,7 +2442,8 @@ export default function RecordingTab() {
           <DraggableWidget
             id="conversation-compass-widget"
             title="Conversation Compass"
-            defaultPosition={{ x: 0, y: 0 }}
+            defaultPosition={{ x: 740, y: 20 }}
+            defaultSize={{ width: 340, height: 360 }}
             className="w-full"
           >
             <div className="p-4 h-[300px] overflow-auto">
@@ -2174,7 +2455,8 @@ export default function RecordingTab() {
           <DraggableWidget
             id="curiosity-engine-widget"
             title="Curiosity Engine"
-            defaultPosition={{ x: 0, y: 0 }}
+            defaultPosition={{ x: 1100, y: 20 }}
+            defaultSize={{ width: 340, height: 360 }}
             className="w-full"
           >
             <div className="p-4 h-[300px] overflow-auto">
@@ -2192,61 +2474,61 @@ export default function RecordingTab() {
             </div>
             <div className="p-4">
               <div className="flex items-center justify-between mb-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              toast({
+                title: "Voice Commands",
+                description: "Voice command functionality will be available in a future update.",
+              })
+            }}
+          >
+            <MessageSquare className="h-4 w-4 mr-2" />
+            Voice Commands
+          </Button>
+        </div>
+        <div className="flex items-center gap-2 mb-4">
+          <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(false)}>
+            <Bookmark className="h-4 w-4 mr-2" />
+            Quick Bookmark (F8)
+          </Button>
+          <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(true)}>
+            <Bookmark className="h-4 w-4 mr-2" />
+            Named Bookmark (F9)
+          </Button>
+          <Button variant="outline" disabled={!isRecording} onClick={triggerManualAnalysis}>
+            <HelpCircle className="h-4 w-4 mr-2" />
+            Full Analysis (F10)
+          </Button>
+        </div>
+
+        {bookmarks.length > 0 ? (
+          <div className="space-y-2">
+            {bookmarks.map((bookmark, index) => (
+              <div key={index} className="flex items-center justify-between p-2 border rounded-md">
+                <div className="flex items-center gap-2">
+                  <Bookmark className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium">{bookmark.name}</span>
+                  <span className="text-xs text-muted-foreground">{formatTime(bookmark.time)}</span>
+                </div>
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
                   onClick={() => {
-                    toast({
-                      title: "Voice Commands",
-                      description: "Voice command functionality will be available in a future update.",
-                    })
+                    setBookmarks(bookmarks.filter((_, i) => i !== index))
                   }}
                 >
-                  <MessageSquare className="h-4 w-4 mr-2" />
-                  Voice Commands
+                  <X className="h-4 w-4" />
                 </Button>
               </div>
-              <div className="flex items-center gap-2 mb-4">
-                <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(false)}>
-                  <Bookmark className="h-4 w-4 mr-2" />
-                  Quick Bookmark (F8)
-                </Button>
-                <Button variant="outline" disabled={!isRecording} onClick={() => addBookmark(true)}>
-                  <Bookmark className="h-4 w-4 mr-2" />
-                  Named Bookmark (F9)
-                </Button>
-                <Button variant="outline" disabled={!isRecording} onClick={triggerManualAnalysis}>
-                  <HelpCircle className="h-4 w-4 mr-2" />
-                  Full Analysis (F10)
-                </Button>
-              </div>
-
-              {bookmarks.length > 0 ? (
-                <div className="space-y-2">
-                  {bookmarks.map((bookmark, index) => (
-                    <div key={index} className="flex items-center justify-between p-2 border rounded-md">
-                      <div className="flex items-center gap-2">
-                        <Bookmark className="h-4 w-4 text-primary" />
-                        <span className="text-sm font-medium">{bookmark.name}</span>
-                        <span className="text-xs text-muted-foreground">{formatTime(bookmark.time)}</span>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setBookmarks(bookmarks.filter((_, i) => i !== index))
-                        }}
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center text-muted-foreground py-4">No bookmarks yet</div>
-              )}
+            ))}
+          </div>
+        ) : (
+          <div className="text-center text-muted-foreground py-4">No bookmarks yet</div>
+        )}
             </div>
-          </Card>
+      </Card>
 
           <Card className="overflow-hidden shadow-md">
             <div className="flex items-center justify-between p-3 bg-gradient-to-r from-accent/40 to-muted border-b">
@@ -2305,7 +2587,7 @@ export default function RecordingTab() {
           <div className="space-y-4 py-4">
             {/* Current Tags */}
             <div className="space-y-3">
-              <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between">
                 <label className="text-sm font-medium">Current Tags ({tags.length})</label>
                 {tags.length > 0 && (
                   <span className="text-xs text-muted-foreground">
@@ -2325,7 +2607,7 @@ export default function RecordingTab() {
                 }, {} as Record<string, Tag[]>)
               ).map(([color, colorTags]) => (
                 <div key={color} className="space-y-2">
-                  <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2">
                     <div className={`w-2 h-2 rounded-full ${TAG_COLORS.find(c => c.value === color)?.class}`} />
                     <span className="text-xs font-medium">{TAG_COLORS.find(c => c.value === color)?.name}</span>
                   </div>
@@ -2384,8 +2666,8 @@ export default function RecordingTab() {
                     </option>
                   ))}
                 </select>
-                <Button 
-                  onClick={() => {
+          <Button
+            onClick={() => {
                     if (newTagName.trim()) {
                       setTags(prev => [...prev, {
                         id: crypto.randomUUID(),
@@ -2399,9 +2681,9 @@ export default function RecordingTab() {
                   className="shrink-0"
                 >
                   Add Tag
-                </Button>
-              </div>
-            </div>
+          </Button>
+        </div>
+      </div>
           </div>
 
           <DialogFooter>

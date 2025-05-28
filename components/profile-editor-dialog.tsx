@@ -40,7 +40,7 @@ export function ProfileEditorDialog({
   const [isCopyingBuiltIn, setIsCopyingBuiltIn] = useState(false)
 
   // Form state
-  const [profileForm, setProfileForm] = useState<Partial<AnalyticsProfile>>({
+  const [profileForm, setProfileForm]:any = useState<any>({
     name: "",
     description: "",
     user_prompt: "",
@@ -133,31 +133,45 @@ export function ProfileEditorDialog({
     }
 
     try {
-      if (isCopyingBuiltIn) {
-        // Create a copy of the built-in profile
-        const newProfile = {
+      // Ensure we have all required fields
+      const completeProfile: AnalyticsProfile = {
           ...profileForm,
-          name: profileForm.name.startsWith("*") ? profileForm.name.substring(1) : profileForm.name,
-        } as AnalyticsProfile
-
-        templateStore.addTemplate(newProfile)
-        templateStore.setActiveTemplate(newProfile.name)
-
-        toast({
-          title: "Profile Created",
-          description: `Created new analytics profile "${newProfile.name}"`,
-        })
-      } else if (isEditing) {
-        // Save the edited profile
-        const profileName = profileForm.name as string
-        templateStore.updateTemplate(profileName, profileForm)
-        templateStore.setActiveTemplate(profileName)
-
-        toast({
-          title: "Profile Saved",
-          description: `Analytics profile "${profileName}" has been updated.`,
-        })
+        name: isCopyingBuiltIn && profileForm.name?.startsWith("*") 
+          ? profileForm.name.substring(1) 
+          : profileForm.name,
+        description: profileForm.description || "",
+        user_prompt: profileForm.user_prompt || "Analyze the transcript to provide insights.",
+        system_prompt: profileForm.system_prompt || "You are an AI assistant analyzing conversations.",
+        template_prompt: profileForm.template_prompt || "Please analyze the following transcript.",
+        curiosity_prompt: profileForm.curiosity_prompt || "",
+        conversation_mode: profileForm.conversation_mode || "tracking",
+        visualization: {
+          default_layout: "radial",
+          node_color_scheme: "default",
+          highlight_decisions: true,
+          highlight_questions: true,
+          expand_level: 1,
+          ...profileForm.visualization,
+        },
+        bookmarks: profileForm.bookmarks || [],
+        version: 2,
       }
+
+      if (isCopyingBuiltIn || isCreatingNew) {
+        // Create a new profile
+        templateStore.addTemplate(completeProfile)
+      } else {
+        // Update existing profile
+        templateStore.updateTemplate(profileName || "", completeProfile)
+      }
+
+      // Set as active template
+      templateStore.setActiveTemplate(completeProfile.name)
+
+        toast({
+        title: isCopyingBuiltIn || isCreatingNew ? "Profile Created" : "Profile Updated",
+        description: `Analytics profile "${completeProfile.name}" has been ${isCopyingBuiltIn || isCreatingNew ? 'created' : 'updated'}.`,
+        })
 
       onOpenChange(false)
     } catch (error) {

@@ -62,8 +62,12 @@ interface ImportFile {
   suggestedTags?: Tag[] // Add suggested tags from entity detection
 }
 
-// Regular expression for the correct filename format: YYMMDD_HHMMSS or YYMMDD_HHMM_Description (without extension)
-const FILENAME_FORMAT_REGEX = /^\d{6}_\d{6}(?:_[^.]+)?$|^\d{6}_\d{4}_[a-zA-Z0-9-_ ]+$/;
+// Regular expression for the correct filename format:
+// YYMMDD_HHMMSS (e.g., 250513_210134)
+// YYMMDD_HHMMSS_* (e.g., 250513_210134_ssss)
+// YYMMDD_HHMM (e.g., 250513_2101)
+// YYMMDD_HHMM_* (e.g., 250513_2101_something)
+const FILENAME_FORMAT_REGEX = /^\d{6}_\d{6}$|^\d{6}_\d{6}_.*$|^\d{6}_\d{4}$|^\d{6}_\d{4}_.*$/;
 
 // Function to check if a filename follows the correct format
 const isValidFilenameFormat = (filename: string): boolean => {
@@ -74,12 +78,9 @@ const isValidFilenameFormat = (filename: string): boolean => {
 
 // Function to format the filename according to the pattern
 const formatFileName = (originalName: string): string => {
-  // Get name without extension
-  const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
-  
-  // If the original filename format is correct (ignoring extension), just ensure .mp3 extension
+  // If the original filename format is correct, keep it exactly as is
   if (isValidFilenameFormat(originalName)) {
-    return `${nameWithoutExt}.mp3`;
+    return originalName;
   }
   
   // Otherwise, generate a system convention filename
@@ -94,13 +95,17 @@ const formatFileName = (originalName: string): string => {
   // Create the datetime part
   const dateTime = `${year}${month}${day}_${hours}${minutes}${seconds}`
   
+  // Get name without extension and the extension
+  const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
+  const extension = originalName.slice(nameWithoutExt.length) || '.mp3';
+  
   // If there's a base name, include it in the formatted name
   if (nameWithoutExt.trim()) {
-    return `${dateTime}_${nameWithoutExt}.mp3`
+    return `${dateTime}_${nameWithoutExt}${extension}`
   }
   
   // Otherwise just use the datetime
-  return `${dateTime}.mp3`
+  return `${dateTime}${extension}`
 }
 
 // Remove the incorrect LocalRecording interface definition and keep only the AssemblyAI related interfaces

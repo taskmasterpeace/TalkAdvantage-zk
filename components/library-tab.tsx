@@ -228,8 +228,12 @@ async function initDB(): Promise<IDBDatabase> {
   });
 }
 
-// Regular expression for the correct filename format: YYMMDD_HHMMSS or YYMMDD_HHMM_Description (without extension)
-const FILENAME_FORMAT_REGEX = /^\d{6}_\d{6}(?:_[^.]+)?$|^\d{6}_\d{4}_[a-zA-Z0-9-_ ]+$/;
+// Regular expression for the correct filename format:
+// YYMMDD_HHMMSS (e.g., 250513_210134)
+// YYMMDD_HHMMSS_* (e.g., 250513_210134_ssss)
+// YYMMDD_HHMM (e.g., 250513_2101)
+// YYMMDD_HHMM_* (e.g., 250513_2101_something)
+const FILENAME_FORMAT_REGEX = /^\d{6}_\d{6}$|^\d{6}_\d{6}_.*$|^\d{6}_\d{4}$|^\d{6}_\d{4}_.*$/;
 
 // Function to check if a filename follows the correct format
 const isValidFilenameFormat = (filename: string): boolean => {
@@ -659,13 +663,13 @@ export default function LibraryTab() {
         // Cast the raw data to CloudRecording type
         const data = cloudData as unknown as CloudRecording[];
         mappedData = data.map(rec => ({
-          id: rec.id,
-          name: rec.name,
+        id: rec.id,
+        name: rec.name,
           description: rec.description,
-          duration_seconds: rec.durationSeconds,
-          created_at: rec.createdAt,
-          is_processed: rec.isProcessed,
-          storage_path: rec.storagePath,
+        duration_seconds: rec.durationSeconds,
+        created_at: rec.createdAt,
+        is_processed: rec.isProcessed,
+        storage_path: rec.storagePath,
           user_id: rec.userId,
           tags: rec.tags
         }));
@@ -960,36 +964,32 @@ export default function LibraryTab() {
   }
 
   const formatRecordingName = (recording: Recording): string => {
-    // Remove any existing extension first
-    let nameWithoutExt = recording.name.replace(/\.[^/.]+$/, "");
+    // Get name without extension and the original extension
+    const nameWithoutExt = recording.name.replace(/\.[^/.]+$/, "");
+    const originalExtension = recording.name.match(/\.[^/.]+$/);
     
-    // If the name already follows our convention, just add .mp3
+    // If the name already follows our convention
     if (isValidFilenameFormat(nameWithoutExt)) {
-      return `${nameWithoutExt}.mp3`;
+      // Return with original extension, or .mp3 if none exists
+      return `${nameWithoutExt}${originalExtension ? originalExtension[0] : '.mp3'}`;
     }
     
     // Otherwise, format according to convention
     const date = new Date(recording.created_at);
     
     // Format as YYMMDD_HHMMSS
-    const yy = date.getFullYear().toString().substring(2); // Last 2 digits of year
-    const mm = (date.getMonth() + 1).toString().padStart(2, '0'); // Month (1-12)
-    const dd = date.getDate().toString().padStart(2, '0'); // Day
+    const yy = date.getFullYear().toString().substring(2);
+    const mm = (date.getMonth() + 1).toString().padStart(2, '0');
+    const dd = date.getDate().toString().padStart(2, '0');
+    const hh = date.getHours().toString().padStart(2, '0');
+    const min = date.getMinutes().toString().padStart(2, '0');
+    const ss = date.getSeconds().toString().padStart(2, '0');
     
-    const hh = date.getHours().toString().padStart(2, '0'); // Hours
-    const min = date.getMinutes().toString().padStart(2, '0'); // Minutes
-    const ss = date.getSeconds().toString().padStart(2, '0'); // Seconds
+    // Create the datetime part
+    const dateTime = `${yy}${mm}${dd}_${hh}${min}${ss}`;
     
-    // Basic format: YYMMDD_HHMMSS
-    let formattedName = `${yy}${mm}${dd}_${hh}${min}${ss}`;
-    
-    // Check if the name includes a description/bookmark
-    if (recording.description) {
-      // Format with bookmark: YYMMDD_HHMM_Description
-      formattedName = `${yy}${mm}${dd}_${hh}${min}_${recording.description}`;
-    }
-    
-    return `${formattedName}.mp3`;
+    // Keep the original name after the date/time pattern
+    return `${dateTime}_${nameWithoutExt}${originalExtension ? originalExtension[0] : '.mp3'}`;
   }
 
   // Helper to safely format recording name
@@ -1063,20 +1063,20 @@ export default function LibraryTab() {
       // For transcript search, we need to fetch transcripts
       if (searchType === "transcript") {
         setIsSearchingTranscripts(true);
-        const results: Record<string, boolean> = {};
-        
+    const results: Record<string, boolean> = {};
+    
         // First check already loaded transcripts
-        Object.entries(transcriptPreviews).forEach(([recordingId, transcript]) => {
+    Object.entries(transcriptPreviews).forEach(([recordingId, transcript]) => {
           if (transcript.toLowerCase().includes(searchQuery.toLowerCase())) {
-            results[recordingId] = true;
-          }
-        });
+        results[recordingId] = true;
+      }
+    });
 
-        // Update results immediately with what we have
-        setTranscriptSearchResults(results);
-        
+    // Update results immediately with what we have
+    setTranscriptSearchResults(results);
+
         // Then get recordings that need transcript fetching
-        const unloadedRecordings = recordings.filter(
+    const unloadedRecordings = recordings.filter(
           rec => rec.is_processed && 
           !transcriptPreviews[rec.id] && 
           !transcriptSearchCache[rec.id]
@@ -1090,9 +1090,9 @@ export default function LibraryTab() {
         for (let i = 0; i < unloadedRecordings.length; i += batchSize) {
           const batch = unloadedRecordings.slice(i, i + batchSize);
           await Promise.all(batch.map(async (recording) => {
-            try {
-              if (storageLocation === "local") {
-                const localRecording = await indexedDBService.getRecording(recording.id);
+      try {
+        if (storageLocation === "local") {
+          const localRecording = await indexedDBService.getRecording(recording.id);
                 const transcript = localRecording?.transcript || "";
                 
                 // Update cache and check search
@@ -1102,23 +1102,23 @@ export default function LibraryTab() {
                 }));
                 
                 if (transcript.toLowerCase().includes(searchQuery.toLowerCase())) {
-                  results[recording.id] = true;
-                }
+              results[recording.id] = true;
+            }
                 
                 // Update preview
-                setTranscriptPreviews(prev => ({
-                  ...prev,
+            setTranscriptPreviews(prev => ({
+              ...prev,
                   [recording.id]: transcript
-                }));
-              } else {
+            }));
+        } else {
                 // For cloud recordings
-                const supabase = getSupabaseClient();
-                const { data, error } = await supabase
-                  .from("transcripts")
-                  .select("full_text")
-                  .eq("recording_id", recording.id)
-                  .single();
-                
+          const supabase = getSupabaseClient();
+          const { data, error } = await supabase
+            .from("transcripts")
+            .select("full_text")
+            .eq("recording_id", recording.id)
+            .single();
+          
                 const transcript = (!error && data?.full_text) ? data.full_text : "";
                 
                 // Update cache and check search
@@ -1128,17 +1128,17 @@ export default function LibraryTab() {
                 }));
                 
                 if (transcript.toLowerCase().includes(searchQuery.toLowerCase())) {
-                  results[recording.id] = true;
-                }
+              results[recording.id] = true;
+            }
                 
                 // Update preview
-                setTranscriptPreviews(prev => ({
-                  ...prev,
+            setTranscriptPreviews(prev => ({
+              ...prev,
                   [recording.id]: transcript
-                }));
-              }
-            } catch (error) {
-              console.error("Error searching transcript:", error);
+            }));
+        }
+      } catch (error) {
+        console.error("Error searching transcript:", error);
               setTranscriptSearchCache(prev => ({
                 ...prev,
                 [recording.id]: ""
@@ -1223,7 +1223,7 @@ export default function LibraryTab() {
     }
   }, [
     searchQuery, 
-    searchType, 
+    searchType,
     recordings, 
     transcriptPreviews, 
     transcriptSearchCache, 
@@ -1770,11 +1770,11 @@ export default function LibraryTab() {
     const handleDeepAnalysis = () => {
       alert("Deep Analysis feature coming soon");
     };
-  
+
     const handleLiveAnalysis = () => {
       alert("Live Analysis feature coming soon");
     };
-  
+
     const handleGoToDate = () => {
       const recordingDate = new Date(recording.created_at);
       setCurrentMonth(new Date(recordingDate.getFullYear(), recordingDate.getMonth(), 1));
@@ -1788,7 +1788,7 @@ export default function LibraryTab() {
       // Use a longer timeout to ensure the first dialog is fully closed
       // before opening the transcript view
     
-        viewTranscript(recording);
+      viewTranscript(recording);
   
     };
     
@@ -1800,7 +1800,7 @@ export default function LibraryTab() {
       setRecordingToRename(recording);
       setShowRenameDialog(true);
     };
-  
+
     return (
       <DialogContent className="sm:max-w-md">
         <DialogHeader className="border-b border-emerald-100 dark:border-emerald-900 pb-4">
@@ -1815,16 +1815,16 @@ export default function LibraryTab() {
         <div className="py-3">
           {/* Add Rename button */}
           <div className="flex gap-2 mb-4">
-            <DialogClose asChild>
-              <Button 
-                variant="outline" 
+                <DialogClose asChild>
+                  <Button 
+                    variant="outline" 
                 className="flex items-center justify-start flex-1 bg-blue-50 hover:bg-blue-100 dark:bg-blue-900/20 dark:hover:bg-blue-900/30 border-blue-200 dark:border-blue-900"
                 onClick={handleRenameClick}
-              >
+                  >
                 <FileAudio className="mr-2 h-4 w-4 text-blue-600 dark:text-blue-400" />
                 <span className="font-medium">Rename</span>
-              </Button>
-            </DialogClose>
+                  </Button>
+                </DialogClose>
           </div>
           
           {/* Rest of the options */}
@@ -1835,14 +1835,14 @@ export default function LibraryTab() {
             <div className="flex-1">
               <h3 className="font-medium">Analysis Options</h3>
               <div className="mt-2 space-y-2">
-                <Button
-                  variant="outline"
+                  <Button 
+                    variant="outline" 
                   className="w-full justify-start"
                   onClick={handleDeepAnalysis}
-                >
+                  >
                   <Brain className="mr-2 h-4 w-4" />
                   Deep Analysis
-                </Button>
+                  </Button>
                 <Button
                   variant="outline"
                   className="w-full justify-start"
@@ -1852,39 +1852,39 @@ export default function LibraryTab() {
                   Live Analysis
                 </Button>
               </div>
+              </div>
             </div>
-          </div>
-  
+            
           <div className="flex gap-2 mb-4">
-            <Button
-              variant="outline"
+                  <Button 
+                    variant="outline" 
               className="flex-1 justify-start"
               onClick={handleGoToDate}
-            >
+                  >
               <Calendar className="mr-2 h-4 w-4" />
               Go to Date
-            </Button>
+                  </Button>
           </div>
-  
+                
           <div className="flex gap-2">
-            <DialogClose asChild>
-              <Button
-                variant="outline"
+                <DialogClose asChild>
+                  <Button 
+                    variant="outline" 
                 className="flex-1 justify-start"
                 onClick={handleViewTranscript}
-              >
+                  >
                 <FileText className="mr-2 h-4 w-4" />
                 View Transcript
-              </Button>
-            </DialogClose>
-            <Button
-              variant="outline"
+                  </Button>
+                </DialogClose>
+                <Button 
+                  variant="outline" 
               className="flex-1 justify-start"
               onClick={handleDownloadTranscript}
-            >
+                >
               <Download className="mr-2 h-4 w-4" />
               Download Transcript
-            </Button>
+                </Button>
           </div>
         </div>
       </DialogContent>
@@ -2149,7 +2149,7 @@ export default function LibraryTab() {
         {/* Add checkbox for selection */}
         <div 
           className="mr-2"
-          onClick={(e) => {
+      onClick={(e) => {
             e.stopPropagation();
             toggleRecordingSelection(recording.id);
           }}
@@ -2477,35 +2477,35 @@ export default function LibraryTab() {
                   </div>
                 </div>
               ) : (
-                <div className="text-sm space-y-1.5">
-                  <p className="text-blue-700 dark:text-blue-300">
-                    <span className="font-medium">Duration:</span> {formatDuration(recording.duration_seconds)}
-                  </p>
-                  <p className="text-blue-700 dark:text-blue-300">
-                    <span className="font-medium">Speakers:</span> 2 detected
-                  </p>
-                  <p className="text-blue-700 dark:text-blue-300">
-                    <span className="font-medium">Overall Sentiment:</span> Positive
-                  </p>
-                  <p className="text-blue-700 dark:text-blue-300">
-                    <span className="font-medium">Key Points:</span>
-                  </p>
-                  <ul className="list-disc list-inside text-blue-600 dark:text-blue-400 pl-2">
-                    <li>Discussion about project timeline</li>
-                    <li>Budget considerations</li>
-                    <li>Team resource allocation</li>
-                  </ul>
-                  <div className="pt-2">
-                    <Link
+              <div className="text-sm space-y-1.5">
+                <p className="text-blue-700 dark:text-blue-300">
+                  <span className="font-medium">Duration:</span> {formatDuration(recording.duration_seconds)}
+                </p>
+                <p className="text-blue-700 dark:text-blue-300">
+                  <span className="font-medium">Speakers:</span> 2 detected
+                </p>
+                <p className="text-blue-700 dark:text-blue-300">
+                  <span className="font-medium">Overall Sentiment:</span> Positive
+                </p>
+                <p className="text-blue-700 dark:text-blue-300">
+                  <span className="font-medium">Key Points:</span>
+                </p>
+                <ul className="list-disc list-inside text-blue-600 dark:text-blue-400 pl-2">
+                  <li>Discussion about project timeline</li>
+                  <li>Budget considerations</li>
+                  <li>Team resource allocation</li>
+                </ul>
+                <div className="pt-2">
+                  <Link
                       href={`/dashboard/recordings/${recording.id}?mode=${storageLocation}`}
-                      className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <ExternalLink className="h-3 w-3" />
-                      View Full Analysis
-                    </Link>
-                  </div>
+                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    View Full Analysis
+                  </Link>
                 </div>
+              </div>
               )}
             </div>
           )}
@@ -2595,53 +2595,96 @@ export default function LibraryTab() {
   );
 
   // Add bulk action controls to the search bar area
-  const renderBulkActions = () => (
-    <div className="flex items-center gap-2">
-      {selectedRecordings.size > 0 && (
-        <>
-          <div className="bg-slate-100 dark:bg-slate-800 rounded-md px-2 py-1 flex items-center gap-1.5">
-            <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
-              {selectedRecordings.size} selected
-            </span>
-          </div>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="destructive"
-                  size="icon"
-                  onClick={() => setShowDeleteDialog(true)}
-                  className="h-7 w-7"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Delete selected recordings (Delete)</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setSelectedRecordings(new Set())}
-                  className="h-7 w-7"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Clear selection (Ctrl/Cmd + A)</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </>
-      )}
-    </div>
-  );
+  const renderBulkActions = () => {
+    // Check if any selected recordings are processed
+    const hasProcessedRecordings = Array.from(selectedRecordings).some(id => 
+      recordings.find(r => r.id === id)?.is_processed
+    );
+
+    return (
+      <div className="flex items-center gap-2">
+        {selectedRecordings.size > 0 && (
+          <>
+            <div className="bg-slate-100 dark:bg-slate-800 rounded-md px-2 py-1 flex items-center gap-1.5">
+              <span className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                {selectedRecordings.size} selected
+              </span>
+            </div>
+            {hasProcessedRecordings && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => {
+                        // Get IDs of processed recordings
+                        const processedIds = Array.from(selectedRecordings).filter(id => 
+                          recordings.find(r => r.id === id)?.is_processed
+                        );
+                        
+                        // Get the processed recordings
+                        const processedRecordings = recordings.filter(r => 
+                          processedIds.includes(r.id)
+                        );
+
+                        // Store the selected recordings in localStorage
+                        localStorage.setItem('selectedTranscripts', JSON.stringify(processedRecordings));
+                        
+                        // Dispatch a custom event to switch tabs
+                        const event = new CustomEvent('switchTab', { detail: 'analysis' });
+                        window.dispatchEvent(event);
+                      }}
+                      className="h-7 w-7"
+                    >
+                      <Brain className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    <p>Send to Deep Analysis</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="destructive"
+                    size="icon"
+                    onClick={() => setShowDeleteDialog(true)}
+                    className="h-7 w-7"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Delete selected recordings (Delete)</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setSelectedRecordings(new Set())}
+                    className="h-7 w-7"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Clear selection (Ctrl/Cmd + A)</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </>
+        )}
+      </div>
+    );
+  };
 
   // Add keyboard shortcut handler
   useEffect(() => {
@@ -3528,7 +3571,7 @@ export default function LibraryTab() {
                       <div key={idx} className="flex items-start mb-1">
                         <span className="font-medium text-blue-600 dark:text-blue-400 mr-2 min-w-[100px]">{label}:</span>
                         <span className="text-slate-700 dark:text-slate-300">{value}</span>
-                      </div>
+                </div>
                     );
                   } else if (line.trim() === '') {
                     // Empty line

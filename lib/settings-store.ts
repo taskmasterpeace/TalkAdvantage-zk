@@ -576,17 +576,33 @@ export const useSettingsStore = create<SettingsState>()(
       }),
       setMaximizedWidget: (widget) => set({ maximizedWidget: widget }),
       resetWidgetPositions: () => set({ 
-        widgetPositions: {},
-        widgetSizes: {},
-        minimizedWidgets: [
-          "ai-insights", 
-          "bookmarks", 
-          "audio-controls", 
-          "analysis-settings", 
-          "tags", 
-          "conversation-compass-widget", 
-          "curiosity-engine-widget"
-        ],
+        widgetPositions: {
+          // Row 1
+          "live-text": { x: 10, y: 40 },
+          "ai-insights": { x: 330, y: 40 },
+          "conversation-compass-widget": { x: 640, y: 380 },
+          "curiosity-engine-widget": { x: 970, y: 380 },
+          // Row 2
+          "analysis-settings": { x: 20, y: 780 },
+          "bookmarks": { x: 330, y: 780 },
+          "audio-controls": { x: 640, y: 780 },
+          // Row 3
+          "tags": { x: 20, y: 700 },
+        },
+        widgetSizes: {
+          // Row 1
+          "live-text": { width: 300, height: 320 },
+          "ai-insights": { width: 300, height: 320 },
+          "conversation-compass-widget": { width: 300, height: 320 },
+          "curiosity-engine-widget": { width: 300, height: 320 },
+          // Row 2
+          "analysis-settings": { width: 300, height: 260 },
+          "bookmarks": { width: 300, height: 260 },
+          "audio-controls": { width: 300, height: 260 },
+          // Row 3
+          "tags": { width: 300, height: 180 },
+        },
+        minimizedWidgets: [],
         maximizedWidget: null,
       }),
 

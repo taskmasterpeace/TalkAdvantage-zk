@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid"
 import type { TrackingStore, ThoughtSegment, ExpansionItem } from "../types/tracking"
 import { generateExpansions, detectTopicDrift } from "../services/expansion-engine"
 import { useSettingsStore } from "../settings-store"
+import { useCompassStore } from "../store/compass-store"
 
 interface TrackingModeActions {
   startTracking: () => void
@@ -13,7 +14,7 @@ interface TrackingModeActions {
   clearExpansions: () => void
 }
 
-const initialState: Omit<TrackingStore, keyof TrackingModeActions> = {
+const initialState = {
   isTracking: false,
   isProcessing: false,
   currentThought: null,
@@ -28,18 +29,20 @@ export const useTrackingStore = create<TrackingStore>()((set, get) => ({
   ...initialState,
 
   startTracking: () => {
-    // Clear any existing silence timeout
-    if (get().silenceTimeout) {
-      clearTimeout(get().silenceTimeout)
+    set({ isTracking: true })
+    
+    // Create initial goal node in compass store
+    const compassStore = useCompassStore.getState()
+    if (!compassStore.goal) {
+      compassStore.setGoal("Track conversation flow and topics")
+      const goalNodeId = compassStore.addNode({
+        type: "goal",
+        text: "Track conversation flow and topics",
+        fromNodeId: null,
+        isActive: true
+      })
+      compassStore.setCurrentNode(goalNodeId)
     }
-
-    set({
-      isTracking: true,
-      isProcessing: false,
-      currentThought: null,
-      expansions: [],
-      silenceTimeout: null,
-    })
   },
 
   stopTracking: () => {
@@ -47,11 +50,7 @@ export const useTrackingStore = create<TrackingStore>()((set, get) => ({
     if (get().silenceTimeout) {
       clearTimeout(get().silenceTimeout)
     }
-
-    set({
-      isTracking: false,
-      silenceTimeout: null,
-    })
+    set({ isTracking: false, silenceTimeout: null })
   },
 
   addThought: async (text: string) => {
@@ -103,6 +102,32 @@ export const useTrackingStore = create<TrackingStore>()((set, get) => ({
       isProcessing: true,
     })
 
+    // Add the thought to the compass visualization
+    const compassStore = useCompassStore.getState()
+    const currentCompassNodeId = compassStore.currentNodeId
+
+    if (currentCompassNodeId) {
+      // Add the thought as a node
+      const thoughtNodeId = compassStore.addNode({
+        type: "user",
+        text,
+        fromNodeId: currentCompassNodeId,
+        speaker: "user",
+        isActive: true
+      })
+
+      // Add a beam connecting the nodes
+      compassStore.addBeam({
+        fromNodeId: currentCompassNodeId,
+        toNodeId: thoughtNodeId,
+        thickness: 1,
+        isActive: true
+      })
+
+      // Set this as the current node
+      compassStore.setCurrentNode(thoughtNodeId)
+    }
+
     // If topic has drifted, clear existing expansions
     if (shouldResetExpansions) {
       set({ expansions: [] })
@@ -117,6 +142,30 @@ export const useTrackingStore = create<TrackingStore>()((set, get) => ({
         lastProcessedTimestamp: Date.now(),
         isProcessing: false,
       })
+
+      // Add expansion nodes to the compass visualization
+      if (expansions.length > 0 && compassStore.currentNodeId) {
+        expansions.forEach((expansion) => {
+          // Add the expansion as a predicted node
+          const expansionNodeId = compassStore.addNode({
+            type: "predicted",
+            text: expansion.text,
+            fromNodeId: compassStore.currentNodeId,
+            speaker: "other",
+            expandedTalkingPoints: expansion.points,
+            intent: expansion.intent,
+            confidence: 0.8
+          })
+
+          // Add a beam connecting to the expansion
+          compassStore.addBeam({
+            fromNodeId: compassStore.currentNodeId!,
+            toNodeId: expansionNodeId,
+            thickness: 0.8,
+            isActive: false
+          })
+        })
+      }
 
       // Set up silence timeout
       const settings = useSettingsStore.getState()
@@ -150,6 +199,10 @@ export const useTrackingStore = create<TrackingStore>()((set, get) => ({
       ...initialState,
       isTracking: get().isTracking, // Preserve tracking state
     })
+
+    // Reset the compass visualization
+    const compassStore = useCompassStore.getState()
+    compassStore.resetCompass()
   },
 
   clearExpansions: () => {

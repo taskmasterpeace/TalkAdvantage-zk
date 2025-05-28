@@ -11,7 +11,7 @@ export async function POST(request: Request) {
 
     // Configure OpenAI client based on provider
     const config: any = {
-      apiKey: apiKey || process.env.OPENAI_API_KEY || "",
+      apiKey: apiKey || process.env.REQUESTY_API_KEY || "",
     }
 
     // Set provider-specific configuration

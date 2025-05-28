@@ -1,36 +1,60 @@
-import { type NextRequest, NextResponse } from "next/server"
-import OpenAI from "openai"
+import { NextResponse } from 'next/server';
+import OpenAI from 'openai';
 
-// Initialize OpenAI client with server-side API key
+// Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-})
+});
 
-export async function POST(request: NextRequest) {
+export async function POST(req: Request) {
   try {
-    const { prompt, model, temperature, maxTokens } = await request.json()
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json(
+        { error: 'OpenAI API key not configured' },
+        { status: 500 }
+      );
+    }
+
+    const { prompt, temperature = 0.7 } = await req.json();
 
     if (!prompt) {
-      return NextResponse.json({ error: "Prompt is required" }, { status: 400 })
+      return NextResponse.json(
+        { error: 'Please provide a prompt' },
+        { status: 400 }
+      );
     }
 
     const completion = await openai.chat.completions.create({
-      model: model || "gpt-4o",
+      model: "gpt-4",
       messages: [
         {
-          role: "user",
-          content: prompt,
+          role: "system",
+          content: "You are an AI assistant specialized in conversation planning and guidance. You provide clear, structured responses that help users navigate complex conversations effectively."
         },
+        {
+          role: "user",
+          content: prompt
+        }
       ],
-      temperature: temperature ?? 0.7,
-      max_tokens: maxTokens,
-    })
+      temperature: temperature,
+    });
 
-    return NextResponse.json({
-      content: completion.choices[0].message.content || "",
-    })
+    const response = completion.choices[0]?.message?.content || '';
+
+    return NextResponse.json({ text: response });
   } catch (error: any) {
-    console.error("Error generating text:", error)
-    return NextResponse.json({ error: error.message || "Failed to generate text" }, { status: 500 })
+    if (error.response) {
+      console.error(error.response.status, error.response.data);
+      return NextResponse.json(
+        { error: error.response.data },
+        { status: error.response.status }
+      );
+    } else {
+      console.error(`Error with OpenAI API request: ${error.message}`);
+      return NextResponse.json(
+        { error: 'An error occurred during your request.' },
+        { status: 500 }
+      );
+    }
   }
 }
