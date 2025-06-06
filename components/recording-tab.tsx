@@ -42,6 +42,7 @@ import {
   Tag as TagIcon,
   Maximize2,
   Move,
+  Settings as SettingsIcon,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import AudioVisualizer from "./audio-visualizer"
@@ -56,7 +57,7 @@ import { ProfileEditorDialog } from "./profile-editor-dialog"
 import { AssemblyAI } from "assemblyai"
 import { getSupabaseClient } from "@/lib/supabase/client"
 import { unifiedRecordingsService } from "@/lib/recordings-service"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import SilenceAlertDialog from "./silence-alert-dialog"
 import DraggableWidget from "./draggable-widget"
 import { Tag } from "@/components/ui/tag"
@@ -64,6 +65,23 @@ import { useLayoutStore } from "@/lib/layout-store"
 import { LayoutManager } from "./layout-manager"
 import { WidgetPicker } from "./widget-picker"
 import { AnalysisTimer } from "@/components/analysis-timer"
+import { useHotLinkDetection } from '@/lib/hooks/use-hotlink-detection';
+import HotLinkWidgets from './hotlink-widgets';
+import HotLinkWidgetDisplay from './hotlink-widget-display';
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { useAnalyticsStore } from "@/lib/store/analytics-store"
+import ContextPackManager from './ContextPackManager';
+import { knowledgeGraphService } from '@/lib/services/knowledge-graph-service';
+import { useAuth } from "@/lib/supabase/auth-context"
+import { ContextPackViewer } from './ContextPackViewer';
+
+interface HotLinkWidget {
+  id: string;
+  triggerWords: string[];
+  name: string;
+  prompt: string;
+  model: 'perplexity' | 'requestify';
+}
 
 // Add a type for the recording state to improve type safety
 type RecordingState = "idle" | "recording" | "paused"
@@ -103,6 +121,8 @@ interface DefaultLayouts {
   [key: string]: LayoutConfig;
 }
 
+const STORAGE_KEY = 'hotlink-widgets';
+
 // Replace the component function with a more organized version
 export default function RecordingTab() {
   const { toast } = useToast()
@@ -110,6 +130,9 @@ export default function RecordingTab() {
   const settings = useSettingsStore()
   const templateStore = useTemplateStore()
   const sessionStore = useSessionStore()
+  const { user } = useAuth()
+  const [showContextPack, setShowContextPack] = useState(false)
+  const [showContextPackViewer, setShowContextPackViewer] = useState(false)
 
   // Core recording state
   const [recordingState, setRecordingState] = useState<RecordingState>("idle")
@@ -169,6 +192,86 @@ export default function RecordingTab() {
 
   // Add state for interval toggle
   const [isIntervalEnabled, setIsIntervalEnabled] = useState(false)
+
+  // Add state for HotLink settings
+  const [showHotLinkSettings, setShowHotLinkSettings] = useState(false);
+  const [hotLinkWidgets, setHotLinkWidgets] = useState<HotLinkWidget[]>(() => {
+    if (typeof window !== 'undefined') {
+      const savedWidgets = localStorage.getItem(STORAGE_KEY);
+      return savedWidgets ? JSON.parse(savedWidgets) : [
+        {
+          id: '1',
+          triggerWords: ['research', 'study', 'analyze'],
+          name: 'Research Widget',
+          prompt: `📋 FlashPrompt (Widget Prompt):
+
+Based on the conversation provided below, your job is to act as an expert research assistant with internet access. Carefully analyze the transcript to identify:
+
+Explicit research requests (directly asked-for information).
+Implicit research needs (topics or gaps hinted at, but not directly requested).
+Potentially valuable research (areas where additional information would clearly benefit the team, even if not mentioned).
+
+For each identified research need, perform thorough, multi-step research using reliable, up-to-date internet sources. Summarize your findings in a clear, concise, and actionable format.
+
+Always follow this exact output structure:
+
+🧠 Research Summary & Insights
+
+1. Identified Research Needs
+- Explicit Requests:
+- Implicit Needs:
+- Potential Opportunities:
+
+2. Research Findings
+[For each research need]
+Summary:
+Key Insights:
+Sources:
+Recommended Next Steps:`,
+          model: 'perplexity' as const
+        },
+        {
+          id: '2',
+          triggerWords: ['github', 'code', 'repository'],
+          name: 'GitHub Widget',
+          prompt: `Based on the conversation provided below, your job is to carefully analyze the recent discussion to identify any problems, challenges, issues, or gaps mentioned. Then, automatically search for active GitHub projects that could help address these problems, prioritizing repositories with high star counts and recent updates.
+
+Always follow this exact format for the output:
+🛠️ GitHub Solution Suggestions
+[Identified Problem]: 
+Suggested GitHub Projects:
+- Project #1: [Repo Name] (Stars: [X], Last Updated: [Date]) - [Brief description]
+- Project #2: [Repo Name] (Stars: [X], Last Updated: [Date]) - [Brief description]
+- Project #3: [Repo Name] (Stars: [X], Last Updated: [Date]) - [Brief description]
+Sources:
+Additional Recommendations:`,
+          model: 'perplexity' as const
+        },
+        {
+          id: '3',
+          triggerWords: ['ticket'],
+          name: 'Ticket Widget',
+          prompt: `Based on the conversation provided below, your job is to analyze all discussed points carefully. Clearly identify issues, actionable tasks, areas for improvement, or we need a ticket for resolving. Generate detailed task tickets following the exact template below.
+
+🎟️ Ticket Creation Template
+[Ticket Title]
+Issue/Problem Statement:
+Objectives & Requirements:
+Implementation Details:
+Additional Assets/Resources:
+Acceptance Criteria:
+Assigned To:
+Priority Level:
+Status:
+Due Date:`,
+          model: 'requestify' as const
+        }
+      ];
+    }
+    return [];
+  });
+
+  const { activeWidget, clearActiveWidget } = useHotLinkDetection(hotLinkWidgets, liveText);
 
   // Function to reset all widgets
   const resetAllWidgets = useCallback(() => {
@@ -325,7 +428,8 @@ export default function RecordingTab() {
           template: {
             system_prompt: activeProfile.system_prompt,
             user_prompt: activeProfile.user_prompt,
-            template_prompt: activeProfile.template_prompt
+            template_prompt: activeProfile.template_prompt,
+            settings: activeProfile.settings || { model: 'mistralai/mistral-7b-instruct' }
           }
         })
       });
@@ -1504,6 +1608,169 @@ const updateAnalysisTimer = useCallback(() => {
     }
   }, [showWidgetHint]);
 
+  // Add effect to update widgets when localStorage changes
+  useEffect(() => {
+    const handleStorageChange = () => {
+      const savedWidgets = localStorage.getItem(STORAGE_KEY);
+      if (savedWidgets) {
+        setHotLinkWidgets(JSON.parse(savedWidgets));
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, []);
+
+  // Add this component inside the file
+  const OPENROUTER_MODELS = [
+    // OpenAI Models
+    { id: 'openai/gpt-4-turbo', name: 'GPT-4 Turbo ($3.0/M)' },
+    { id: 'openai/gpt-4', name: 'GPT-4 ($3.0/M)' },
+    { id: 'openai/gpt-4-vision', name: 'GPT-4 Vision ($3.0/M)' },
+    { id: 'openai/gpt-3.5-turbo', name: 'GPT-3.5 Turbo ($0.5/M)' },
+    { id: 'openai/gpt-4o', name: 'GPT-4 Omni ($5.0/M)' },
+    // Free Models
+    { id: 'mistralai/mistral-7b-instruct', name: 'Mistral 7B Instruct (Free)' },
+    { id: 'meta-llama/llama-3-8b-instruct', name: 'LLaMA 3 8B Instruct (Free)' },
+    { id: 'google/gemma-3-27b-it', name: 'Gemma 3 27B Instruct (Free)' },
+    { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1 (Free)' },
+    { id: 'recursal/eagle-7b', name: 'RWKV v5: Eagle 7B (Free)' },
+    { id: 'qwen/qwen-2-7b-instruct', name: 'Qwen 2 7B Instruct (Free)' },
+    // Paid Models
+    { id: 'microsoft/phi-3-medium-4k-instruct', name: 'Phi-3 Medium 4K Instruct ($0.14/M)' },
+    { id: 'google/gemini-pro-vision', name: 'Gemini Pro Vision ($0.125/M)' },
+    { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash 001 ($0.1/M)' },
+    { id: 'meta-llama/llama-2-13b-chat', name: 'LLaMA 2 13B Chat ($0.2/M)' },
+    { id: 'nousresearch/nous-hermes-llama2-13b', name: 'Nous Hermes LLaMA2 13B ($0.2/M)' },
+    { id: 'fireworks/firellava-13b', name: 'FireLLaVA 13B ($0.2/M)' },
+    { id: 'anthropic/claude-3-haiku', name: 'Claude 3 Haiku ($0.25/M)' },
+    { id: 'ai21/jamba-instruct', name: 'AI21: Jamba Instruct ($0.5/M)' },
+    { id: 'meta-llama/codellama-34b-instruct', name: 'CodeLlama 34B Instruct ($0.5/M)' },
+    { id: 'google/palm-2-chat-bison', name: 'PaLM 2 Chat Bison ($0.5/M)' },
+    { id: 'google/palm-2-codechat-bison', name: 'PaLM 2 CodeChat Bison ($0.5/M)' },
+    { id: 'cognitivecomputations/dolphin-mixtral-8x7b', name: 'Dolphin Mixtral 8x7B ($0.5/M)' },
+    { id: 'meta-llama/llama-3-70b-instruct', name: 'LLaMA 3 70B Instruct ($0.59/M)' },
+    { id: 'qwen/qwen-2-72b-instruct', name: 'Qwen 2 72B Instruct ($0.56/M)' },
+    { id: 'meta-llama/llama-3-70b-instruct:nitro', name: 'LLaMA 3 70B Instruct Nitro ($0.9/M)' },
+    { id: 'sao10k/l3-euryale-70b', name: 'LLaMA 3 Euryale 70B v2.1 ($1.48/M)' },
+    { id: 'pygmalionai/mythalion-13b', name: 'Mythalion 13B ($1.875/M)' },
+    { id: 'gryphe/mythomax-l2-13b', name: 'MythoMax L2 13B ($1.875/M)' },
+    { id: 'undi95/remm-slerp-l2-13b', name: 'Remm Slerp L2 13B ($1.875/M)' },
+    { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet ($3.0/M)' },
+    { id: '01-ai/yi-large', name: 'Yi Large ($3.0/M)' },
+    { id: 'nvidia/nemotron-4-340b-instruct', name: 'NVIDIA Nemotron-4 340B Instruct ($4.2/M)' },
+    // Perplexity Models
+    { id: 'perplexity/r1-1776', name: 'Perplexity R1-1776 ($2.0/M in, $8.0/M out)' }
+  ]
+
+  function ProfileModelSettings({ profileId }: { profileId: string }) {
+    const { profiles, updateProfile } = useAnalyticsStore()
+    const profile = profiles.find(p => p.id === profileId)
+    const [open, setOpen] = useState(false)
+    const currentModel = profile?.settings?.model || 'mistralai/mistral-7b-instruct'
+
+    const handleChange = async (model: string) => {
+      await updateProfile(profileId, { settings: { ...profile?.settings, model } })
+      setOpen(false)
+    }
+
+    return (
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button variant="ghost" size="icon" className="ml-1" title="Model Settings">
+            <SettingsIcon className="h-4 w-4" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-64">
+          <div className="mb-2 font-medium">Select Model for this Profile</div>
+          <select
+            className="w-full border rounded p-2"
+            value={currentModel}
+            onChange={e => handleChange(e.target.value)}
+          >
+            {OPENROUTER_MODELS.map(model => (
+              <option key={model.id} value={model.id}>{model.name} ({model.id})</option>
+            ))}
+          </select>
+        </PopoverContent>
+      </Popover>
+    )
+  }
+
+  // Handler to save context pack to Weaviate
+  const handleSaveContextPack = async (pack: {
+    user_name: string;
+    user_role: string;
+    goal: string;
+    sub_goals: string[];
+    person: string;
+    person_relationship: string;
+    participants: Array<{
+      name: string;
+      role: string;
+      relationship_to_user: string;
+      apex_profile?: {
+        risk_tolerance?: string;
+        decision_speed?: string;
+        key_motivators?: string[];
+        recent_behavior?: string;
+      };
+    }>;
+    documents: Array<{
+      name: string;
+      file: string;
+      tags?: string[];
+    }>;
+    context_description: string;
+    key_topics: string[];
+    notes: string;
+    timeline?: string[];
+    conflict_map?: string;
+    environmental_factors?: string;
+  }) => {
+    try {
+      if (!user?.id) {
+        toast({
+          variant: "destructive",
+          title: "Error",
+          description: "User not authenticated"
+        });
+        return;
+      }
+
+      await knowledgeGraphService.createContextPack({
+        userId: user.id,
+        name: pack.user_name,
+        userRole: pack.user_role,
+        goal: pack.goal,
+        subGoals: pack.sub_goals,
+        person: pack.person,
+        personRelationship: pack.person_relationship,
+        participants: pack.participants,
+        documents: pack.documents,
+        contextDescription: pack.context_description,
+        keyTopics: pack.key_topics,
+        notes: pack.notes,
+        timeline: pack.timeline,
+        conflictMap: pack.conflict_map,
+        environmentalFactors: pack.environmental_factors
+      });
+
+      toast({
+        title: "Success",
+        description: "Context pack saved successfully"
+      });
+      setShowContextPack(false);
+    } catch (error) {
+      console.error('Error saving context pack:', error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to save context pack"
+      });
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Show saving overlay when saving */}
@@ -1862,6 +2129,17 @@ const updateAnalysisTimer = useCallback(() => {
                         </SelectGroup>
                       </SelectContent>
                     </Select>
+                    {/* Add the gear icon for model settings */}
+                    {(() => {
+                      const activeProfile = templateStore.templates.find(
+                        (t) => t.name === templateStore.activeTemplate
+                      )
+                      // Find the analytics profile in the analytics store by name
+                      const analyticsProfile = useAnalyticsStore.getState().profiles.find(
+                        (p) => p.name === activeProfile?.name
+                      )
+                      return analyticsProfile ? <ProfileModelSettings profileId={analyticsProfile.id} /> : null
+                    })()}
                     <div className="flex gap-1">
                     <Button
                       variant="outline"
@@ -1938,7 +2216,7 @@ const updateAnalysisTimer = useCallback(() => {
       </div>
 
       {/* Main Content Area */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative">
+      <div>
         {/* Only show draggable widgets when drag and drop is enabled */}
         {settings.enableDragDrop ? (
           <>
@@ -1948,9 +2226,9 @@ const updateAnalysisTimer = useCallback(() => {
               title="Live Text"
               defaultPosition={{ x: 20, y: 20 }}
               defaultSize={{ width: 300, height: 320 }}
-              className="w-full md:w-auto"
+              className="w-full"
               // Force visibility for this critical widget
-              forceVisible={true}
+         
             >
               <div className="p-2 flex items-center justify-between border-b">
                 <div className="flex items-center gap-2">
@@ -2092,8 +2370,8 @@ const updateAnalysisTimer = useCallback(() => {
               </Tabs>
             </DraggableWidget>
           </>
-        ) : (
-          <>
+        ) : !settings.enableDragDrop &&(
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative">
             {/* Standard non-draggable layout for when drag and drop is disabled */}
             <Card className="overflow-hidden shadow-md">
               <div className="flex items-center justify-between p-3 bg-gradient-to-r from-accent/40 to-muted border-b">
@@ -2234,7 +2512,7 @@ const updateAnalysisTimer = useCallback(() => {
             </TabsContent>
           </Tabs>
         </Card>
-          </>
+          </div>
         )}
       </div>
 
@@ -2729,6 +3007,74 @@ const updateAnalysisTimer = useCallback(() => {
         thresholdMinutes={settings.silenceDetection.thresholdMinutes}
         type={countdownSeconds === null ? 'stopped' : 'initial'}
       />
+
+      {/* Add HotLink Settings Button */}
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          onClick={() => setShowHotLinkSettings(true)}
+          className="gap-2"
+        >
+          <SettingsIcon className="h-4 w-4" />
+          HotLink Settings
+        </Button>
+      </div>
+
+      {/* HotLink Settings Dialog */}
+      <Dialog open={showHotLinkSettings} onOpenChange={setShowHotLinkSettings}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>HotLink Flash Widgets</DialogTitle>
+            <DialogDescription>
+              Configure widgets that activate when specific words are spoken
+            </DialogDescription>
+          </DialogHeader>
+          <HotLinkWidgets />
+        </DialogContent>
+      </Dialog>
+
+      {/* Active HotLink Widget Display */}
+      {activeWidget && (
+        <HotLinkWidgetDisplay
+          widget={activeWidget}
+          transcript={liveText}
+          onClose={clearActiveWidget}
+        />
+      )}
+
+    
+
+      {/* Context Pack Manager Dialog */}
+      <Dialog open={showContextPack} onOpenChange={setShowContextPack}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Save Context Pack</DialogTitle>
+          </DialogHeader>
+          <ContextPackManager
+            onSave={handleSaveContextPack}
+            onClose={() => setShowContextPack(false)}
+          />
+        </DialogContent>
+      </Dialog>
+
+      <div className="flex gap-2">
+        <Button onClick={() => setShowContextPack(true)}>
+          Create Context Pack
+        </Button>
+        <Button onClick={() => setShowContextPackViewer(true)}>
+          View Context Packs
+        </Button>
+      </div>
+
+      {/* Context Pack Viewer Dialog */}
+      <Dialog open={showContextPackViewer} onOpenChange={setShowContextPackViewer}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Context Packs</DialogTitle>
+          </DialogHeader>
+          <ContextPackViewer />
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

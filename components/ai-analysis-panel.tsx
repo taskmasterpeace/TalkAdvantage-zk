@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
 import { useToast } from "@/hooks/use-toast"
-import { Loader2, Send, BrainCircuit, XCircle, Save, Maximize2 } from "lucide-react"
+import { Loader2, Send, BrainCircuit, XCircle, Save, Maximize2, Settings } from "lucide-react"
 import { useSettingsStore } from "@/lib/settings-store"
 import { useTemplateStore } from "@/lib/template-store"
 import { useSessionStore } from "@/lib/session-store"
@@ -18,6 +18,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { FullScreenAnalysis } from "./full-screen-analysis"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
 interface AIAnalysisPanelProps {
   transcript: string;
@@ -41,6 +48,63 @@ export default function AIAnalysisPanel({ transcript, analysisResult, isAnalyzin
   const [showErrorDialog, setShowErrorDialog] = useState(false)
   const [errorMessage, setErrorMessage] = useState("")
   const [showFullScreen, setShowFullScreen] = useState(false)
+
+  // Initialize selected model independently
+  const [selectedModel, setSelectedModel] = useState(() => {
+    // Initialize from localStorage if available, otherwise use default
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('aiAnalysisModel') || 'mistralai/mistral-7b-instruct'
+    }
+    return 'mistralai/mistral-7b-instruct'
+  })
+
+  // Save model selection to localStorage whenever it changes
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('aiAnalysisModel', selectedModel)
+    }
+  }, [selectedModel])
+
+  const OPENROUTER_MODELS = [
+    // OpenAI Models
+    { id: 'openai/gpt-4-turbo', name: 'GPT-4 Turbo ($3.0/M)' },
+    { id: 'openai/gpt-4', name: 'GPT-4 ($3.0/M)' },
+    { id: 'openai/gpt-4-vision', name: 'GPT-4 Vision ($3.0/M)' },
+    { id: 'openai/gpt-3.5-turbo', name: 'GPT-3.5 Turbo ($0.5/M)' },
+    { id: 'openai/gpt-4o', name: 'GPT-4 Omni ($5.0/M)' },
+    // Free Models
+    { id: 'mistralai/mistral-7b-instruct', name: 'Mistral 7B Instruct (Free)' },
+    { id: 'meta-llama/llama-3-8b-instruct', name: 'LLaMA 3 8B Instruct (Free)' },
+    { id: 'google/gemma-3-27b-it', name: 'Gemma 3 27B Instruct (Free)' },
+    { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1 (Free)' },
+    { id: 'recursal/eagle-7b', name: 'RWKV v5: Eagle 7B (Free)' },
+    { id: 'qwen/qwen-2-7b-instruct', name: 'Qwen 2 7B Instruct (Free)' },
+    // Paid Models
+    { id: 'microsoft/phi-3-medium-4k-instruct', name: 'Phi-3 Medium 4K Instruct ($0.14/M)' },
+    { id: 'google/gemini-pro-vision', name: 'Gemini Pro Vision ($0.125/M)' },
+    { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash 001 ($0.1/M)' },
+    { id: 'meta-llama/llama-2-13b-chat', name: 'LLaMA 2 13B Chat ($0.2/M)' },
+    { id: 'nousresearch/nous-hermes-llama2-13b', name: 'Nous Hermes LLaMA2 13B ($0.2/M)' },
+    { id: 'fireworks/firellava-13b', name: 'FireLLaVA 13B ($0.2/M)' },
+    { id: 'anthropic/claude-3-haiku', name: 'Claude 3 Haiku ($0.25/M)' },
+    { id: 'ai21/jamba-instruct', name: 'AI21: Jamba Instruct ($0.5/M)' },
+    { id: 'meta-llama/codellama-34b-instruct', name: 'CodeLlama 34B Instruct ($0.5/M)' },
+    { id: 'google/palm-2-chat-bison', name: 'PaLM 2 Chat Bison ($0.5/M)' },
+    { id: 'google/palm-2-codechat-bison', name: 'PaLM 2 CodeChat Bison ($0.5/M)' },
+    { id: 'cognitivecomputations/dolphin-mixtral-8x7b', name: 'Dolphin Mixtral 8x7B ($0.5/M)' },
+    { id: 'meta-llama/llama-3-70b-instruct', name: 'LLaMA 3 70B Instruct ($0.59/M)' },
+    { id: 'qwen/qwen-2-72b-instruct', name: 'Qwen 2 72B Instruct ($0.56/M)' },
+    { id: 'meta-llama/llama-3-70b-instruct:nitro', name: 'LLaMA 3 70B Instruct Nitro ($0.9/M)' },
+    { id: 'sao10k/l3-euryale-70b', name: 'LLaMA 3 Euryale 70B v2.1 ($1.48/M)' },
+    { id: 'pygmalionai/mythalion-13b', name: 'Mythalion 13B ($1.875/M)' },
+    { id: 'gryphe/mythomax-l2-13b', name: 'MythoMax L2 13B ($1.875/M)' },
+    { id: 'undi95/remm-slerp-l2-13b', name: 'Remm Slerp L2 13B ($1.875/M)' },
+    { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet ($3.0/M)' },
+    { id: '01-ai/yi-large', name: 'Yi Large ($3.0/M)' },
+    { id: 'nvidia/nemotron-4-340b-instruct', name: 'NVIDIA Nemotron-4 340B Instruct ($4.2/M)' },
+    // Perplexity Models
+    { id: 'perplexity/r1-1776', name: 'Perplexity R1-1776 ($2.0/M in, $8.0/M out)' }
+  ]
 
   // Format the analysis result to make headings bold
   const formatAnalysisResult = (text: string) => {
@@ -124,7 +188,8 @@ export default function AIAnalysisPanel({ transcript, analysisResult, isAnalyzin
         template: {
           system_prompt: finalSystemPrompt,
           user_prompt: finalUserPrompt,
-          template_prompt: skipTemplate ? "" : activeTemplate.template_prompt
+          template_prompt: skipTemplate ? "" : activeTemplate.template_prompt,
+          settings: { model: selectedModel } // Use the locally selected model
         }
       });
 
@@ -139,7 +204,8 @@ export default function AIAnalysisPanel({ transcript, analysisResult, isAnalyzin
           template: {
             system_prompt: finalSystemPrompt,
             user_prompt: finalUserPrompt,
-            template_prompt: skipTemplate ? "" : activeTemplate.template_prompt
+            template_prompt: skipTemplate ? "" : activeTemplate.template_prompt,
+            settings: { model: selectedModel } // Use the locally selected model
           }
         })
       })
@@ -257,27 +323,60 @@ export default function AIAnalysisPanel({ transcript, analysisResult, isAnalyzin
     <Card className="p-4">
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-            <h3 className="text-xl font-bold flex items-center gap-2">
+          <h3 className="text-xl font-bold flex items-center gap-2">
             <BrainCircuit className="h-5 w-5 text-primary" />
             AI Analysis
           </h3>
-          <div className="flex gap-2">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={runQuickAnalysis} 
-                disabled={isAnalyzingState || !transcript}
-                className="relative"
-              >
-                Quick Analysis
+          <div className="flex items-center gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon">
+                  <Settings className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-[300px]">
+                <div className="p-2">
+                  <h4 className="text-sm font-medium mb-2">Model Settings</h4>
+                  <Select
+                    value={selectedModel}
+                    onValueChange={(value) => {
+                      setSelectedModel(value);
+                      toast({
+                        title: "Model Updated",
+                        description: "Your model preference has been saved.",
+                      });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select model" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {OPENROUTER_MODELS.map(model => (
+                        <SelectItem key={model.id} value={model.id}>
+                          {model.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={runQuickAnalysis} 
+              disabled={isAnalyzingState || !transcript}
+              className="relative"
+            >
+              Quick Analysis
             </Button>
-              <Button 
-                variant="outline" 
-                size="sm" 
-                onClick={runDetailedAnalysis} 
-                disabled={isAnalyzingState || !transcript}
-              >
-                Detailed Analysis
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={runDetailedAnalysis} 
+              disabled={isAnalyzingState || !transcript}
+            >
+              Detailed Analysis
             </Button>
           </div>
         </div>

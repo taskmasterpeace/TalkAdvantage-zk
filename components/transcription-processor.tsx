@@ -168,12 +168,39 @@ export default function TranscriptionProcessor({
           if (!recording) {
             throw new Error("Recording not found");
           }
+
+          // Format transcript with timestamps if words data is available
+          let formattedTranscript = data.transcript;
+          if (data.words && data.words.length > 0) {
+            // Group words by timestamp ranges
+            const segments: { start: number; end: number; text: string }[] = [];
+            let currentSegment = { start: data.words[0].start, end: data.words[0].end, text: data.words[0].text };
+            
+            for (let i = 1; i < data.words.length; i++) {
+              const word = data.words[i];
+              // If there's a significant gap (> 1 second) or speaker change, start a new segment
+              if (word.start - currentSegment.end > 1000 || word.speaker !== data.words[i-1].speaker) {
+                segments.push(currentSegment);
+                currentSegment = { start: word.start, end: word.end, text: word.text };
+              } else {
+                currentSegment.end = word.end;
+                currentSegment.text += " " + word.text;
+              }
+            }
+            segments.push(currentSegment);
+
+            // Format segments with timestamps
+            formattedTranscript = segments.map(segment => {
+              const startTime = new Date(segment.start).toISOString().substr(11, 8);
+              return `${startTime} ${segment.text}`;
+            }).join('\n');
+          }
           
           // Use the specialized method to add transcript data
           console.log("Adding transcript to local recording:", recordingId);
           const updatedRecording = await indexedDBService.addTranscriptToRecording(
             recordingId,
-            data.transcript,
+            formattedTranscript,
             data.summary,
             data.speaker_count,
             data.overall_sentiment,
@@ -201,24 +228,60 @@ export default function TranscriptionProcessor({
         // For cloud recordings, store in Supabase (processed by API)
         const supabase = getSupabaseClient();
         
-        // Create transcript segments if available
+        // Format transcript with timestamps if words data is available
+        let formattedTranscript = data.transcript;
         if (data.words && data.words.length > 0) {
-          const segments = data.words.map((word: any) => ({
+          // Group words by timestamp ranges
+          const textSegments: { start: number; end: number; text: string }[] = [];
+          let currentSegment = { start: data.words[0].start, end: data.words[0].end, text: data.words[0].text };
+          
+          for (let i = 1; i < data.words.length; i++) {
+            const word = data.words[i];
+            // If there's a significant gap (> 1 second) or speaker change, start a new segment
+            if (word.start - currentSegment.end > 1000 || word.speaker !== data.words[i-1].speaker) {
+              textSegments.push(currentSegment);
+              currentSegment = { start: word.start, end: word.end, text: word.text };
+            } else {
+              currentSegment.end = word.end;
+              currentSegment.text += " " + word.text;
+            }
+          }
+          textSegments.push(currentSegment);
+
+          // Format segments with timestamps
+          formattedTranscript = textSegments.map(segment => {
+            const startTime = new Date(segment.start).toISOString().substr(11, 8);
+            return `${startTime} ${segment.text}`;
+          }).join('\n');
+
+          // Create transcript segments if available
+          const dbSegments = data.words.map((word: any) => ({
             transcript_id: data.transcriptId,
             speaker: word.speaker || "Unknown",
             start_ms: word.start,
             end_ms: word.end,
             text: word.text,
           }));
-  
-          const { error: segmentsError } = await supabase.from("transcript_segments").insert(segments);
-  
+
+          const { error: segmentsError } = await supabase.from("transcript_segments").insert(dbSegments);
+
           if (segmentsError) {
             console.error("Error inserting segments:", segmentsError);
             // Continue even if segments insertion fails
           }
-          }
         }
+
+        // Update the transcript with formatted text
+        const { error: transcriptError } = await supabase
+          .from("transcripts")
+          .update({ full_text: formattedTranscript })
+          .eq("recording_id", recordingId);
+
+        if (transcriptError) {
+          console.error("Error updating transcript:", transcriptError);
+          // Continue even if transcript update fails
+        }
+      }
 
       // Update UI for success (same for both local and cloud)
       setProgress(100)

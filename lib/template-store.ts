@@ -27,6 +27,8 @@ export interface AnalyticsProfile {
   system_prompt: string
   user_prompt: string
   template_prompt: string
+  curiosity_prompt?: string
+  conversation_mode?: string
   version: number
   visualization: {
     default_layout: string
@@ -35,6 +37,21 @@ export interface AnalyticsProfile {
     highlight_questions: boolean
     expand_level: number
   }
+  settings?: {
+    model: string
+    [key: string]: any
+  }
+  bookmarks?: Array<{
+    name: string
+    bookmark_type: string
+    key_shortcut: string
+    voice_trigger: string
+    content: string
+    description: string
+    is_user_speaking: boolean
+    is_decision_point: boolean
+    is_action_item: boolean
+  }>
   advanced?: {
     curiosity_engine_prompt: string
     // Add other advanced fields as needed

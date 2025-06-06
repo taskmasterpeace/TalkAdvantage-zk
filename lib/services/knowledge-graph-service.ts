@@ -43,6 +43,78 @@ export interface Relationship {
   updatedAt: Date;
 }
 
+export interface ContextPack {
+  id: string;
+  userId: string;
+  name: string;
+  userRole: string;
+  goal: string;
+  subGoals: string[];
+  person: string;
+  personRelationship: string;
+  participants: Array<{
+    name: string;
+    role: string;
+    relationship_to_user: string;
+    apex_profile?: {
+      risk_tolerance?: string;
+      decision_speed?: string;
+      key_motivators?: string[];
+      recent_behavior?: string;
+    };
+  }>;
+  documents: Array<{
+    name: string;
+    file: string;
+    tags?: string[];
+  }>;
+  contextDescription: string;
+  keyTopics: string[];
+  notes: string;
+  timeline?: string[];
+  conflictMap?: string;
+  environmentalFactors?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+interface WeaviateResponse {
+  id: string;
+  properties: {
+    userId: string;
+    name: string;
+    userRole: string;
+    goal: string;
+    subGoals: string[];
+    person: string;
+    personRelationship: string;
+    participants: Array<{
+      name: string;
+      role: string;
+      relationship_to_user: string;
+      apex_profile?: {
+        risk_tolerance?: string;
+        decision_speed?: string;
+        key_motivators?: string[];
+        recent_behavior?: string;
+      };
+    }>;
+    documents: Array<{
+      name: string;
+      file: string;
+      tags?: string[];
+    }>;
+    contextDescription: string;
+    keyTopics: string[];
+    notes: string;
+    timeline?: string[];
+    conflictMap?: string;
+    environmentalFactors?: string;
+    createdAt: string;
+    updatedAt: string;
+  };
+}
+
 // Initialize schema on startup
 async function ensureSchemaInitialized() {
   if (schemaInitialized) return;
@@ -268,6 +340,217 @@ async function initializeKnowledgeGraphSchema() {
             {
               name: 'updatedAt',
               dataType: ['date']
+            }
+          ]
+        })
+        .do();
+    }
+
+    // Create ContextPack class if it doesn't exist
+    const contextPackClassExists = schema.classes?.some(c => c.class === 'ContextPack');
+    if (!contextPackClassExists) {
+      await client.schema
+        .classCreator()
+        .withClass({
+          class: 'ContextPack',
+          vectorizer: 'text2vec-transformers',
+          moduleConfig: {
+            'text2vec-transformers': {
+              vectorizeClassName: false,
+              model: 'sentence-transformers-multi-qa-MiniLM-L6-cos-v1',
+              poolingStrategy: 'masked_mean',
+              inferenceUrl: 'http://t2v-transformers:8080'
+            }
+          },
+          properties: [
+            {
+              name: 'userId',
+              dataType: ['string'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: true
+                }
+              }
+            },
+            {
+              name: 'name',
+              dataType: ['string'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: true
+                }
+              }
+            },
+            {
+              name: 'userRole',
+              dataType: ['string'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: true
+                }
+              }
+            },
+            {
+              name: 'goal',
+              dataType: ['text'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: false
+                }
+              }
+            },
+            {
+              name: 'subGoals',
+              dataType: ['string[]'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: true
+                }
+              }
+            },
+            {
+              name: 'person',
+              dataType: ['string'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: true
+                }
+              }
+            },
+            {
+              name: 'personRelationship',
+              dataType: ['string'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: true
+                }
+              }
+            },
+            {
+              name: 'participants',
+              dataType: ['object[]'],
+              properties: [
+                {
+                  name: 'name',
+                  dataType: ['string']
+                },
+                {
+                  name: 'role',
+                  dataType: ['string']
+                },
+                {
+                  name: 'relationship_to_user',
+                  dataType: ['string']
+                },
+                {
+                  name: 'apex_profile',
+                  dataType: ['object'],
+                  properties: [
+                    {
+                      name: 'risk_tolerance',
+                      dataType: ['string']
+                    },
+                    {
+                      name: 'decision_speed',
+                      dataType: ['string']
+                    },
+                    {
+                      name: 'key_motivators',
+                      dataType: ['string[]']
+                    },
+                    {
+                      name: 'recent_behavior',
+                      dataType: ['string']
+                    }
+                  ]
+                }
+              ],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: true
+                }
+              }
+            },
+            {
+              name: 'documents',
+              dataType: ['text[]'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: true
+                }
+              }
+            },
+            {
+              name: 'contextDescription',
+              dataType: ['text'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: false
+                }
+              }
+            },
+            {
+              name: 'keyTopics',
+              dataType: ['string[]'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: true
+                }
+              }
+            },
+            {
+              name: 'notes',
+              dataType: ['text'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: false
+                }
+              }
+            },
+            {
+              name: 'timeline',
+              dataType: ['string[]'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: true
+                }
+              }
+            },
+            {
+              name: 'conflictMap',
+              dataType: ['text'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: false
+                }
+              }
+            },
+            {
+              name: 'environmentalFactors',
+              dataType: ['text'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: false
+                }
+              }
+            },
+            {
+              name: 'createdAt',
+              dataType: ['date'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: true
+                }
+              }
+            },
+            {
+              name: 'updatedAt',
+              dataType: ['date'],
+              moduleConfig: {
+                'text2vec-transformers': {
+                  skip: true
+                }
+              }
             }
           ]
         })
@@ -857,4 +1140,277 @@ export const knowledgeGraphService = {
       throw error;
     }
   },
+
+  // Context Pack specific methods
+  async createContextPack(contextPack: Omit<ContextPack, 'id' | 'createdAt' | 'updatedAt'>): Promise<ContextPack> {
+    await ensureSchemaInitialized();
+    
+    try {
+      // Delete all previous context packs for this user
+      await this.deleteAllUserContextPacks(contextPack.userId);
+
+      // Format the documents array to match Weaviate's expected structure
+      const formattedDocuments = contextPack.documents.map(doc => 
+        JSON.stringify({
+          name: doc.name,
+          file: doc.file,
+          tags: doc.tags || []
+        })
+      );
+
+      const result = await client.data
+        .creator()
+        .withClassName('ContextPack')
+        .withProperties({
+          ...contextPack,
+          documents: formattedDocuments,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        })
+        .do() as WeaviateResponse;
+
+      if (!result.properties) {
+        throw new Error('No properties returned from Weaviate');
+      }
+
+      return {
+        ...contextPack,
+        id: result.id,
+        createdAt: new Date(result.properties.createdAt),
+        updatedAt: new Date(result.properties.updatedAt)
+      };
+    } catch (error) {
+      console.error('Error creating context pack:', error);
+      throw error;
+    }
+  },
+
+  async updateContextPack(id: string, updates: Partial<ContextPack>): Promise<ContextPack> {
+    await ensureSchemaInitialized();
+    
+    try {
+      const result = await client.data
+        .updater()
+        .withClassName('ContextPack')
+        .withId(id)
+        .withProperties({
+          ...updates,
+          updatedAt: new Date().toISOString()
+        })
+        .do() as WeaviateResponse;
+
+      if (!result.properties) {
+        throw new Error('No properties returned from Weaviate');
+      }
+
+      return {
+        ...result.properties,
+        id: result.id,
+        createdAt: new Date(result.properties.createdAt),
+        updatedAt: new Date(result.properties.updatedAt)
+      };
+    } catch (error) {
+      console.error('Error updating context pack:', error);
+      throw error;
+    }
+  },
+
+  async deleteContextPack(id: string): Promise<boolean> {
+    await ensureSchemaInitialized();
+    
+    try {
+      await client.data
+        .deleter()
+        .withClassName('ContextPack')
+        .withId(id)
+        .do();
+      return true;
+    } catch (error) {
+      console.error('Error deleting context pack:', error);
+      throw error;
+    }
+  },
+
+  async getContextPack(id: string): Promise<ContextPack | null> {
+    await ensureSchemaInitialized();
+    
+    try {
+      const result = await client.data
+        .getterById()
+        .withClassName('ContextPack')
+        .withId(id)
+        .do() as WeaviateResponse;
+
+      if (!result) return null;
+      if (!result.properties) {
+        throw new Error('No properties returned from Weaviate');
+      }
+
+      return {
+        ...result.properties,
+        id: result.id,
+        createdAt: new Date(result.properties.createdAt),
+        updatedAt: new Date(result.properties.updatedAt)
+      };
+    } catch (error) {
+      console.error('Error getting context pack:', error);
+      throw error;
+    }
+  },
+
+  async getUserContextPacks(userId: string): Promise<ContextPack[]> {
+    await ensureSchemaInitialized();
+    
+    try {
+      const result = await client.graphql
+        .get()
+        .withClassName('ContextPack')
+        .withFields('id userId name userRole goal subGoals person personRelationship participants documents contextDescription keyTopics notes timeline conflictMap environmentalFactors createdAt updatedAt')
+        .withWhere({
+          operator: 'Equal',
+          path: ['userId'],
+          valueString: userId
+        })
+        .do();
+
+      return result.data.Get.ContextPack.map((pack: any) => ({
+        ...pack,
+        createdAt: new Date(pack.createdAt),
+        updatedAt: new Date(pack.updatedAt)
+      }));
+    } catch (error) {
+      console.error('Error getting user context packs:', error);
+      throw error;
+    }
+  },
+
+  async searchContextPacks(query: string, userId?: string, limit: number = 10): Promise<ContextPack[]> {
+    await ensureSchemaInitialized();
+    
+    try {
+      let graphqlQuery = client.graphql
+        .get()
+        .withClassName('ContextPack')
+        .withFields('id userId name userRole goal subGoals person personRelationship participants documents contextDescription keyTopics notes timeline conflictMap environmentalFactors createdAt updatedAt')
+        .withNearText({ concepts: [query] })
+        .withLimit(limit);
+
+      if (userId) {
+        graphqlQuery = graphqlQuery.withWhere({
+          operator: 'Equal',
+          path: ['userId'],
+          valueString: userId
+        });
+      }
+
+      const result = await graphqlQuery.do();
+
+      return result.data.Get.ContextPack.map((pack: any) => ({
+        ...pack,
+        createdAt: new Date(pack.createdAt),
+        updatedAt: new Date(pack.updatedAt)
+      }));
+    } catch (error) {
+      console.error('Error searching context packs:', error);
+      throw error;
+    }
+  },
+
+  // Add new method to delete all context packs for a user
+  async deleteAllUserContextPacks(userId: string): Promise<boolean> {
+    await ensureSchemaInitialized();
+    
+    try {
+      const result = await client.graphql
+        .get()
+        .withClassName('ContextPack')
+        .withFields('_additional { id }')
+        .withWhere({
+          operator: 'Equal',
+          path: ['userId'],
+          valueString: userId
+        })
+        .do();
+
+      if (result.data?.Get?.ContextPack) {
+        for (const pack of result.data.Get.ContextPack) {
+          await this.deleteContextPack(pack._additional.id);
+        }
+      }
+      return true;
+    } catch (error) {
+      console.error('Error deleting all user context packs:', error);
+      throw error;
+    }
+  },
+
+  // Add new method to get all context packs
+  async getAllContextPacks(limit: number = 100): Promise<ContextPack[]> {
+    await ensureSchemaInitialized();
+    
+    try {
+      const result = await client.graphql
+        .get()
+        .withClassName('ContextPack')
+        .withFields(`
+          _additional { id }
+          userId
+          name
+          userRole
+          goal
+          subGoals
+          person
+          personRelationship
+          participants {
+            name
+            role
+            relationship_to_user
+          }
+          documents
+          contextDescription
+          keyTopics
+          notes
+          timeline
+          conflictMap
+          environmentalFactors
+          createdAt
+          updatedAt
+        `)
+        .withLimit(limit)
+        .do();
+
+      if (!result.data?.Get?.ContextPack) {
+        return [];
+      }
+
+      return result.data.Get.ContextPack.map((pack: any) => ({
+        id: pack._additional?.id || '',
+        userId: pack.userId || '',
+        name: pack.name || '',
+        userRole: pack.userRole || '',
+        goal: pack.goal || '',
+        subGoals: pack.subGoals || [],
+        person: pack.person || '',
+        personRelationship: pack.personRelationship || '',
+        participants: (pack.participants || []).map((p: any) => ({
+          name: p.name || '',
+          role: p.role || '',
+          relationship_to_user: p.relationship_to_user || '',
+          apex_profile: p.apex_profile || {}
+        })),
+        documents:pack.documents ,
+        contextDescription: pack.contextDescription || '',
+        keyTopics: pack.keyTopics || [],
+        notes: pack.notes || '',
+        timeline: pack.timeline || [],
+        conflictMap: pack.conflictMap || '',
+        environmentalFactors: pack.environmentalFactors || '',
+        createdAt: new Date(pack.createdAt || new Date().toISOString()),
+        updatedAt: new Date(pack.updatedAt || new Date().toISOString())
+      }));
+    } catch (error) {
+      console.error('Error getting all context packs:', error);
+      throw error;
+    }
+  }
 }; 

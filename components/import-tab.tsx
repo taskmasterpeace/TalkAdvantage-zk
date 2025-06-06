@@ -121,6 +121,7 @@ interface TranscriptionResult {
   transcript: string;
   entities?: AssemblyAIEntity[];
   summary?: string;
+  words?: { start: number; end: number; text: string; speaker: string }[];
 }
 
 // Update the generateTagFromEntity function
@@ -332,6 +333,33 @@ export default function ImportTab() {
 
       const result = await response.json() as TranscriptionResult;
 
+      // Format transcript with timestamps from word-level data
+      let formattedTranscript = result.transcript;
+      if (result.words && result.words.length > 0) {
+        // Group words by timestamp ranges
+        const segments: { start: number; end: number; text: string }[] = [];
+        let currentSegment = { start: result.words[0].start, end: result.words[0].end, text: result.words[0].text };
+        
+        for (let i = 1; i < result.words.length; i++) {
+          const word = result.words[i];
+          // If there's a significant gap (> 1 second) or speaker change, start a new segment
+          if (word.start - currentSegment.end > 1000 || word.speaker !== result.words[i-1].speaker) {
+            segments.push(currentSegment);
+            currentSegment = { start: word.start, end: word.end, text: word.text };
+          } else {
+            currentSegment.end = word.end;
+            currentSegment.text += " " + word.text;
+          }
+        }
+        segments.push(currentSegment);
+
+        // Format segments with timestamps
+        formattedTranscript = segments.map(segment => {
+          const startTime = new Date(segment.start).toISOString().substr(11, 8);
+          return `${startTime} ${segment.text}`;
+        }).join('\n');
+      }
+
       // Handle entity detection results before updating storage
       let suggestedTags: Tag[] = [];
       if (result.entities && result.entities.length > 0) {
@@ -352,7 +380,7 @@ export default function ImportTab() {
       if (unifiedRecordingsService.isLocalStorage()) {
         await indexedDBService.addTranscriptToRecording(
           recording.id,
-          result.transcript,
+          formattedTranscript,
           result.summary || null
         );
 

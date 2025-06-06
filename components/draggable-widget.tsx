@@ -95,31 +95,59 @@ export default function DraggableWidget({
   useEffect(() => {
     if (!isDragging) return
     
+    let lastX = 0;
+    let lastY = 0;
+    let isMoving = false;
+    
     const handleMouseMove = (e: MouseEvent) => {
-      const newX = Math.max(0, e.clientX - dragOffset.x)
-      const newY = Math.max(0, e.clientY - dragOffset.y)
+      // Calculate movement delta
+      const deltaX = e.clientX - lastX;
+      const deltaY = e.clientY - lastY;
+      
+      // Only start moving after a small threshold to prevent accidental movements
+      if (!isMoving) {
+        if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+          isMoving = true;
+        } else {
+          return;
+        }
+      }
+      
+      // Update last position
+      lastX = e.clientX;
+      lastY = e.clientY;
+      
+      // Calculate new position with bounds checking
+      const newX = Math.max(0, e.clientX - dragOffset.x);
+      const newY = Math.max(-150, e.clientY - dragOffset.y);
       
       // Update position in state
-      updateWidgetPosition(id, { x: newX, y: newY })
-      
-      // Debug message
-      console.log(`Widget ${id} position: x=${newX}, y=${newY}`)
+      updateWidgetPosition(id, { x: newX, y: newY });
     }
     
-    const handleMouseUp = () => {
-      setIsDragging(false)
-      // Ensure we save the layout when dragging ends
-      useLayoutStore.getState().updateCurrentLayout()
+    const handleMouseUp = (e: MouseEvent) => {
+      // Only trigger if we were actually moving
+      if (isMoving) {
+        setIsDragging(false);
+        // Ensure we save the layout when dragging ends
+        useLayoutStore.getState().updateCurrentLayout();
+      }
     }
     
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-    document.body.style.cursor = 'grabbing'
+    // Initialize last position
+    lastX = dragOffset.x;
+    lastY = dragOffset.y;
+    
+    document.addEventListener('mousemove', handleMouseMove, { passive: true });
+    document.addEventListener('mouseup', handleMouseUp);
+    document.body.style.cursor = 'grabbing';
+    document.body.style.userSelect = 'none';
     
     return () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      document.body.style.cursor = ''
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
     }
   }, [isDragging, dragOffset, id, updateWidgetPosition])
   
@@ -163,15 +191,37 @@ export default function DraggableWidget({
     if ((e.target as HTMLElement).closest('button')) return
     
     e.preventDefault()
-    setIsDragging(true)
     
-    const rect = widgetRef.current?.getBoundingClientRect()
-    if (rect) {
-      setDragOffset({
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top
-      })
+    // Store initial mouse position
+    const initialX = e.clientX;
+    const initialY = e.clientY;
+    
+    // Add a small delay before starting drag to prevent accidental movements
+    const dragTimeout = setTimeout(() => {
+      const rect = widgetRef.current?.getBoundingClientRect()
+      if (rect) {
+        // Calculate offset from the header area only
+        const headerHeight = 34; // Height of the widget header
+        const clickY = initialY - rect.top;
+        
+        // If click is in the header area, use that exact offset
+        // Otherwise, use a small fixed offset
+        const yOffset = clickY <= headerHeight ? clickY : 5;
+        
+        setDragOffset({
+          x: initialX - rect.left,
+          y: yOffset
+        });
+        setIsDragging(true)
+      }
+    }, 50)
+    
+    // Clean up timeout if mouse is released before drag starts
+    const cleanup = () => {
+      clearTimeout(dragTimeout)
+      document.removeEventListener('mouseup', cleanup)
     }
+    document.addEventListener('mouseup', cleanup)
   }
   
   // Handle resize start
@@ -225,7 +275,7 @@ export default function DraggableWidget({
   
   // Check if this widget is essential and cannot be removed
   // "live-text" is essential by default
-  const isEssential = id === "live-text" || forceVisible
+  const isEssential = id === "" || forceVisible
   
   // If this widget isn't in the current layout, don't render it
   if (!isWidgetVisible) return null
