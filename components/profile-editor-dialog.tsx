@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast"
 import { useTemplateStore, type AnalyticsProfile } from "@/lib/template-store"
 import { Save, X, AlertTriangle, Copy } from "lucide-react"
+import { useAnalyticsStore } from "@/lib/store/analytics-store"
 
 interface ProfileEditorDialogProps {
   open: boolean
@@ -34,13 +35,14 @@ export function ProfileEditorDialog({
 }: ProfileEditorDialogProps) {
   const { toast } = useToast()
   const templateStore = useTemplateStore()
+  const { profiles, updateProfile } = useAnalyticsStore()
 
   const [activeTab, setActiveTab] = useState("basic")
   const [isEditing, setIsEditing] = useState(false)
   const [isCopyingBuiltIn, setIsCopyingBuiltIn] = useState(false)
 
   // Form state
-  const [profileForm, setProfileForm] = useState<Partial<AnalyticsProfile>>({
+  const [profileForm, setProfileForm]:any = useState<any>({
     name: "",
     description: "",
     user_prompt: "",
@@ -58,6 +60,48 @@ export function ProfileEditorDialog({
     bookmarks: [],
     version: 2,
   })
+
+  // Add OPENROUTER_MODELS constant
+  const OPENROUTER_MODELS = [
+    // OpenAI Models
+    { id: 'openai/gpt-4-turbo', name: 'GPT-4 Turbo ($3.0/M)' },
+    { id: 'openai/gpt-4', name: 'GPT-4 ($3.0/M)' },
+    { id: 'openai/gpt-4-vision', name: 'GPT-4 Vision ($3.0/M)' },
+    { id: 'openai/gpt-3.5-turbo', name: 'GPT-3.5 Turbo ($0.5/M)' },
+    { id: 'openai/gpt-4o', name: 'GPT-4 Omni ($5.0/M)' },
+    // Free Models
+    { id: 'mistralai/mistral-7b-instruct', name: 'Mistral 7B Instruct (Free)' },
+    { id: 'meta-llama/llama-3-8b-instruct', name: 'LLaMA 3 8B Instruct (Free)' },
+    { id: 'google/gemma-3-27b-it', name: 'Gemma 3 27B Instruct (Free)' },
+    { id: 'deepseek/deepseek-r1', name: 'DeepSeek R1 (Free)' },
+    { id: 'recursal/eagle-7b', name: 'RWKV v5: Eagle 7B (Free)' },
+    { id: 'qwen/qwen-2-7b-instruct', name: 'Qwen 2 7B Instruct (Free)' },
+    // Paid Models
+    { id: 'microsoft/phi-3-medium-4k-instruct', name: 'Phi-3 Medium 4K Instruct ($0.14/M)' },
+    { id: 'google/gemini-pro-vision', name: 'Gemini Pro Vision ($0.125/M)' },
+    { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash 001 ($0.1/M)' },
+    { id: 'meta-llama/llama-2-13b-chat', name: 'LLaMA 2 13B Chat ($0.2/M)' },
+    { id: 'nousresearch/nous-hermes-llama2-13b', name: 'Nous Hermes LLaMA2 13B ($0.2/M)' },
+    { id: 'fireworks/firellava-13b', name: 'FireLLaVA 13B ($0.2/M)' },
+    { id: 'anthropic/claude-3-haiku', name: 'Claude 3 Haiku ($0.25/M)' },
+    { id: 'ai21/jamba-instruct', name: 'AI21: Jamba Instruct ($0.5/M)' },
+    { id: 'meta-llama/codellama-34b-instruct', name: 'CodeLlama 34B Instruct ($0.5/M)' },
+    { id: 'google/palm-2-chat-bison', name: 'PaLM 2 Chat Bison ($0.5/M)' },
+    { id: 'google/palm-2-codechat-bison', name: 'PaLM 2 CodeChat Bison ($0.5/M)' },
+    { id: 'cognitivecomputations/dolphin-mixtral-8x7b', name: 'Dolphin Mixtral 8x7B ($0.5/M)' },
+    { id: 'meta-llama/llama-3-70b-instruct', name: 'LLaMA 3 70B Instruct ($0.59/M)' },
+    { id: 'qwen/qwen-2-72b-instruct', name: 'Qwen 2 72B Instruct ($0.56/M)' },
+    { id: 'meta-llama/llama-3-70b-instruct:nitro', name: 'LLaMA 3 70B Instruct Nitro ($0.9/M)' },
+    { id: 'sao10k/l3-euryale-70b', name: 'LLaMA 3 Euryale 70B v2.1 ($1.48/M)' },
+    { id: 'pygmalionai/mythalion-13b', name: 'Mythalion 13B ($1.875/M)' },
+    { id: 'gryphe/mythomax-l2-13b', name: 'MythoMax L2 13B ($1.875/M)' },
+    { id: 'undi95/remm-slerp-l2-13b', name: 'Remm Slerp L2 13B ($1.875/M)' },
+    { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet ($3.0/M)' },
+    { id: '01-ai/yi-large', name: 'Yi Large ($3.0/M)' },
+    { id: 'nvidia/nemotron-4-340b-instruct', name: 'NVIDIA Nemotron-4 340B Instruct ($4.2/M)' },
+    // Perplexity Models
+    { id: 'perplexity/r1-1776', name: 'Perplexity R1-1776 ($2.0/M in, $8.0/M out)' }
+  ]
 
   // Initialize form when dialog opens
   useEffect(() => {
@@ -133,31 +177,49 @@ export function ProfileEditorDialog({
     }
 
     try {
-      if (isCopyingBuiltIn) {
-        // Create a copy of the built-in profile
-        const newProfile = {
-          ...profileForm,
-          name: profileForm.name.startsWith("*") ? profileForm.name.substring(1) : profileForm.name,
-        } as AnalyticsProfile
-
-        templateStore.addTemplate(newProfile)
-        templateStore.setActiveTemplate(newProfile.name)
-
-        toast({
-          title: "Profile Created",
-          description: `Created new analytics profile "${newProfile.name}"`,
-        })
-      } else if (isEditing) {
-        // Save the edited profile
-        const profileName = profileForm.name as string
-        templateStore.updateTemplate(profileName, profileForm)
-        templateStore.setActiveTemplate(profileName)
-
-        toast({
-          title: "Profile Saved",
-          description: `Analytics profile "${profileName}" has been updated.`,
-        })
+      // Ensure we have all required fields
+      const completeProfile: AnalyticsProfile = {
+        ...profileForm,
+        name: isCopyingBuiltIn && profileForm.name?.startsWith("*") 
+          ? profileForm.name.substring(1) 
+          : profileForm.name,
+        description: profileForm.description || "",
+        user_prompt: profileForm.user_prompt || "Analyze the transcript to provide insights.",
+        system_prompt: profileForm.system_prompt || "You are an AI assistant analyzing conversations.",
+        template_prompt: profileForm.template_prompt || "Please analyze the following transcript.",
+        curiosity_prompt: profileForm.curiosity_prompt || "",
+        conversation_mode: profileForm.conversation_mode || "tracking",
+        visualization: {
+          default_layout: "radial",
+          node_color_scheme: "default",
+          highlight_decisions: true,
+          highlight_questions: true,
+          expand_level: 1,
+          ...profileForm.visualization,
+        },
+        bookmarks: profileForm.bookmarks || [],
+        version: 2,
+        settings: {
+          model: profileForm.settings?.model || 'mistralai/mistral-7b-instruct',
+          ...profileForm.settings
+        }
       }
+
+      if (isCopyingBuiltIn || isCreatingNew) {
+        // Create a new profile
+        templateStore.addTemplate(completeProfile)
+      } else {
+        // Update existing profile
+        templateStore.updateTemplate(profileName || "", completeProfile)
+      }
+
+      // Set as active template
+      templateStore.setActiveTemplate(completeProfile.name)
+
+      toast({
+        title: isCopyingBuiltIn || isCreatingNew ? "Profile Created" : "Profile Updated",
+        description: `Analytics profile "${completeProfile.name}" has been ${isCopyingBuiltIn || isCreatingNew ? 'created' : 'updated'}.`,
+      })
 
       onOpenChange(false)
     } catch (error) {
@@ -233,6 +295,38 @@ export function ProfileEditorDialog({
                   placeholder="Enter a brief description of this profile"
                   disabled={!isEditing && !isCopyingBuiltIn}
                 />
+              </div>
+
+              {/* Add Model Selection */}
+              <div className="space-y-2">
+                <Label htmlFor="model-select">AI Model</Label>
+                <Select
+                  value={profileForm.settings?.model || 'mistralai/mistral-7b-instruct'}
+                  onValueChange={(value) =>
+                    setProfileForm({
+                      ...profileForm,
+                      settings: {
+                        ...profileForm.settings,
+                        model: value
+                      }
+                    })
+                  }
+                  disabled={!isEditing && !isCopyingBuiltIn}
+                >
+                  <SelectTrigger id="model-select">
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {OPENROUTER_MODELS.map(model => (
+                      <SelectItem key={model.id} value={model.id}>
+                        {model.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-sm text-muted-foreground">
+                  Select the AI model to use for this profile's analysis.
+                </p>
               </div>
 
               <div className="space-y-2">

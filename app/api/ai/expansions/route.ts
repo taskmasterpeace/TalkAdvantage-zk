@@ -1,10 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
-import OpenAI from "openai"
 
-// Initialize OpenAI client with server-side API key
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "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";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 // Helper function to replace template variables in prompts
 function replaceTemplateVariables(template: string, variables: Record<string, string>): string {
@@ -28,14 +25,37 @@ export async function POST(request: NextRequest) {
       thought,
     })
 
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages: [{ role: "user", content: prompt }],
-      temperature: 0.7,
-      max_tokens: 500,
-    })
+    const response = await fetch(OPENROUTER_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+        'HTTP-Referer': process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000',
+        'X-Title': 'TalkAdvantage Conversation Compass'
+      },
+      body: JSON.stringify({
+        model: "mistralai/mistral-7b-instruct",
+        messages: [
+          {
+            role: "system",
+            content: "You are an AI assistant specialized in conversation analysis and expansion. You help users develop and deepen their ideas during speech or explanation."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ],
+        temperature: 0.7,
+        max_tokens: 1000
+      }),
+    });
 
-    const content = response.choices[0]?.message?.content || "{}"
+    if (!response.ok) {
+      throw new Error('Failed to generate expansions');
+    }
+
+    const result = await response.json();
+    const content = result.choices[0]?.message?.content || "{}";
 
     // Extract JSON from the response
     const jsonMatch = content.match(/\{[\s\S]*\}/)

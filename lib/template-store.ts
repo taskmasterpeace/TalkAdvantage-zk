@@ -24,14 +24,38 @@ export interface Visualization {
 export interface AnalyticsProfile {
   name: string
   description: string
-  user_prompt: string
   system_prompt: string
+  user_prompt: string
   template_prompt: string
-  bookmarks: Bookmark[]
-  curiosity_prompt: string
-  conversation_mode: string
-  visualization: Visualization
+  curiosity_prompt?: string
+  conversation_mode?: string
   version: number
+  visualization: {
+    default_layout: string
+    node_color_scheme: string
+    highlight_decisions: boolean
+    highlight_questions: boolean
+    expand_level: number
+  }
+  settings?: {
+    model: string
+    [key: string]: any
+  }
+  bookmarks?: Array<{
+    name: string
+    bookmark_type: string
+    key_shortcut: string
+    voice_trigger: string
+    content: string
+    description: string
+    is_user_speaking: boolean
+    is_decision_point: boolean
+    is_action_item: boolean
+  }>
+  advanced?: {
+    curiosity_engine_prompt: string
+    // Add other advanced fields as needed
+  }
 }
 
 interface TemplateState {
@@ -229,17 +253,33 @@ const DEFAULT_TEMPLATES: AnalyticsProfile[] = [
 export const useTemplateStore = create<TemplateState>()(
   persist(
     (set, get) => ({
-      templates: [],
+      templates: DEFAULT_TEMPLATES,
       activeTemplate: "*Meeting Summary",
 
-      addTemplate: (template) =>
+      addTemplate: (template) => {
+        // Ensure the template has a unique name
+        const existingTemplate = get().templates.find((t) => t.name === template.name)
+        if (existingTemplate) {
+          let counter = 1
+          let newName = `${template.name} (${counter})`
+          while (get().templates.find((t) => t.name === newName)) {
+            counter++
+            newName = `${template.name} (${counter})`
+          }
+          template.name = newName
+        }
+
         set((state) => ({
           templates: [...state.templates, template],
-        })),
+          activeTemplate: template.name, // Set as active template
+        }))
+      },
 
       updateTemplate: (name, updates) =>
         set((state) => ({
           templates: state.templates.map((t) => (t.name === name ? { ...t, ...updates } : t)),
+          // Update active template name if it was renamed
+          activeTemplate: updates.name && state.activeTemplate === name ? updates.name : state.activeTemplate,
         })),
 
       deleteTemplate: (name) => {
@@ -259,16 +299,42 @@ export const useTemplateStore = create<TemplateState>()(
       setActiveTemplate: (name) => set({ activeTemplate: name }),
 
       loadDefaultTemplates: () => {
-        // Load default templates if none exist
-        if (get().templates.length === 0) {
-          set({
-            templates: DEFAULT_TEMPLATES,
-          })
+        const currentTemplates = get().templates
+        // Only add default templates that don't already exist
+        const defaultsToAdd = DEFAULT_TEMPLATES.filter(
+          (defaultTemplate) =>
+            !currentTemplates.some((t) => t.name === defaultTemplate.name)
+        )
+        
+        if (defaultsToAdd.length > 0) {
+          set((state) => ({
+            templates: [...state.templates, ...defaultsToAdd],
+          }))
         }
       },
     }),
     {
       name: "talkadvantage-templates",
-    },
-  ),
+      version: 2, // Increment version to force rehydration
+      storage: {
+        getItem: (name) => {
+          const str = localStorage.getItem(name)
+          if (!str) return null
+          try {
+            const data = JSON.parse(str)
+            // Ensure we always have default templates
+            if (!data.state.templates.some((t: any) => t.name === "*Meeting Summary")) {
+              data.state.templates = [...data.state.templates, ...DEFAULT_TEMPLATES]
+            }
+            return data
+          } catch (e) {
+            console.error("Error parsing templates from storage:", e)
+            return null
+          }
+        },
+        setItem: (name, value) => localStorage.setItem(name, JSON.stringify(value)),
+        removeItem: (name) => localStorage.removeItem(name),
+      },
+    }
+  )
 )

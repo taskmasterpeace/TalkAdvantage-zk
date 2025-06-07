@@ -62,8 +62,12 @@ interface ImportFile {
   suggestedTags?: Tag[] // Add suggested tags from entity detection
 }
 
-// Regular expression for the correct filename format: YYMMDD_HHMMSS or YYMMDD_HHMM_Description (without extension)
-const FILENAME_FORMAT_REGEX = /^\d{6}_\d{6}(?:_[^.]+)?$|^\d{6}_\d{4}_[a-zA-Z0-9-_ ]+$/;
+// Regular expression for the correct filename format:
+// YYMMDD_HHMMSS (e.g., 250513_210134)
+// YYMMDD_HHMMSS_* (e.g., 250513_210134_ssss)
+// YYMMDD_HHMM (e.g., 250513_2101)
+// YYMMDD_HHMM_* (e.g., 250513_2101_something)
+const FILENAME_FORMAT_REGEX = /^\d{6}_\d{6}$|^\d{6}_\d{6}_.*$|^\d{6}_\d{4}$|^\d{6}_\d{4}_.*$/;
 
 // Function to check if a filename follows the correct format
 const isValidFilenameFormat = (filename: string): boolean => {
@@ -74,12 +78,9 @@ const isValidFilenameFormat = (filename: string): boolean => {
 
 // Function to format the filename according to the pattern
 const formatFileName = (originalName: string): string => {
-  // Get name without extension
-  const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
-  
-  // If the original filename format is correct (ignoring extension), just ensure .mp3 extension
+  // If the original filename format is correct, keep it exactly as is
   if (isValidFilenameFormat(originalName)) {
-    return `${nameWithoutExt}.mp3`;
+    return originalName;
   }
   
   // Otherwise, generate a system convention filename
@@ -94,13 +95,17 @@ const formatFileName = (originalName: string): string => {
   // Create the datetime part
   const dateTime = `${year}${month}${day}_${hours}${minutes}${seconds}`
   
+  // Get name without extension and the extension
+  const nameWithoutExt = originalName.replace(/\.[^/.]+$/, "");
+  const extension = originalName.slice(nameWithoutExt.length) || '.mp3';
+  
   // If there's a base name, include it in the formatted name
   if (nameWithoutExt.trim()) {
-    return `${dateTime}_${nameWithoutExt}.mp3`
+    return `${dateTime}_${nameWithoutExt}${extension}`
   }
   
   // Otherwise just use the datetime
-  return `${dateTime}.mp3`
+  return `${dateTime}${extension}`
 }
 
 // Remove the incorrect LocalRecording interface definition and keep only the AssemblyAI related interfaces
@@ -116,6 +121,7 @@ interface TranscriptionResult {
   transcript: string;
   entities?: AssemblyAIEntity[];
   summary?: string;
+  words?: { start: number; end: number; text: string; speaker: string }[];
 }
 
 // Update the generateTagFromEntity function
@@ -327,6 +333,33 @@ export default function ImportTab() {
 
       const result = await response.json() as TranscriptionResult;
 
+      // Format transcript with timestamps from word-level data
+      let formattedTranscript = result.transcript;
+      if (result.words && result.words.length > 0) {
+        // Group words by timestamp ranges
+        const segments: { start: number; end: number; text: string }[] = [];
+        let currentSegment = { start: result.words[0].start, end: result.words[0].end, text: result.words[0].text };
+        
+        for (let i = 1; i < result.words.length; i++) {
+          const word = result.words[i];
+          // If there's a significant gap (> 1 second) or speaker change, start a new segment
+          if (word.start - currentSegment.end > 1000 || word.speaker !== result.words[i-1].speaker) {
+            segments.push(currentSegment);
+            currentSegment = { start: word.start, end: word.end, text: word.text };
+          } else {
+            currentSegment.end = word.end;
+            currentSegment.text += " " + word.text;
+          }
+        }
+        segments.push(currentSegment);
+
+        // Format segments with timestamps
+        formattedTranscript = segments.map(segment => {
+          const startTime = new Date(segment.start).toISOString().substr(11, 8);
+          return `${startTime} ${segment.text}`;
+        }).join('\n');
+      }
+
       // Handle entity detection results before updating storage
       let suggestedTags: Tag[] = [];
       if (result.entities && result.entities.length > 0) {
@@ -347,7 +380,7 @@ export default function ImportTab() {
       if (unifiedRecordingsService.isLocalStorage()) {
         await indexedDBService.addTranscriptToRecording(
           recording.id,
-          result.transcript,
+          formattedTranscript,
           result.summary || null
         );
 

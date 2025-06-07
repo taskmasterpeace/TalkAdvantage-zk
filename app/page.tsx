@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { CheckCircle2, Zap, Mic, FileText, BrainCircuit, BarChart3, Users, Check } from "lucide-react"
 import { motion } from "framer-motion"
+import { DocumentChat } from './components/DocumentChat'
 
 const fadeInUp = {
   initial: { opacity: 0, y: 20 },
@@ -755,6 +756,8 @@ export default function LandingPage() {
           animation: text-gradient 6s linear infinite;
         }
       `}</style>
+
+      <DocumentChat />
     </div>
   )
 }

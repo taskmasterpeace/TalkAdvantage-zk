@@ -50,6 +50,16 @@ export default function DashboardClient() {
   // Only render the client component after mounting to avoid hydration issues
   useEffect(() => {
     setMounted(true)
+
+    // Add event listener for tab switching
+    const handleTabSwitch = (event: CustomEvent) => {
+      setActiveTab(event.detail);
+    };
+
+    window.addEventListener('switchTab', handleTabSwitch as EventListener);
+    return () => {
+      window.removeEventListener('switchTab', handleTabSwitch as EventListener);
+    };
   }, [])
 
   if (!mounted) {
@@ -73,7 +83,7 @@ export default function DashboardClient() {
       <DashboardHeader />
       <main className="flex-1 p-4 md:p-6">
         <Card className="border-none shadow-none">
-          <Tabs defaultValue={activeTab} onValueChange={setActiveTab} className="w-full">
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
             <TabsList className="grid grid-cols-4 mb-4 bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-950/30 dark:to-indigo-950/30 p-1 rounded-lg border border-blue-200 dark:border-blue-800 shadow-sm">
               <TabsTrigger 
                 value="record"

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { Settings, Target, Maximize2, Minimize2 } from "lucide-react"
@@ -20,20 +20,38 @@ export default function ConversationCompass({ hasContent }: ConversationCompassP
   // Get state and actions from the compass store
   const {
     mode,
-    layout,
-    colorScheme,
-    highlightDecisions,
-    highlightQuestions,
-    expandLevel,
+    nodes,
+    goal,
     setMode,
-    setLayout,
-    setColorScheme,
-    setHighlightDecisions,
-    setHighlightQuestions,
-    setExpandLevel,
+    setGoal,
+    addNode,
+    setCurrentNode,
   } = useCompassStore()
 
-  if (!hasContent) {
+  // Initialize the compass with a default goal if none exists
+  useEffect(() => {
+    if (!goal && nodes.length === 0) {
+      // Set a default goal
+      setGoal("Track conversation flow and topics")
+      
+      // Create initial goal node
+      const goalNodeId = addNode({
+        type: "goal",
+        text: "Track conversation flow and topics",
+        fromNodeId: null,
+        isActive: true,
+        speaker: "system"
+      })
+      
+      // Set as current node
+      setCurrentNode(goalNodeId)
+    }
+  }, [goal, nodes, setGoal, addNode, setCurrentNode])
+
+  // Consider the compass to have content if there's a goal or nodes
+  const hasCompassContent = Boolean(goal) || nodes.length > 0
+
+  if (!hasCompassContent) {
     return (
       <div className="h-full flex flex-col items-center justify-center p-6 text-center">
         <div className="w-16 h-16 rounded-full bg-muted flex items-center justify-center mb-4">

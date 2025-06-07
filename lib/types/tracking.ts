@@ -2,14 +2,14 @@ export interface ThoughtSegment {
   id: string
   text: string
   timestamp: number
-  topicTag?: string // Optional: quick topic label
 }
 
 export interface ExpansionItem {
   id: string
-  type: "follow-up" | "example" | "related-topic" | "reflection"
   text: string
-  confidence?: number // optional
+  points: string[]
+  intent: string
+  type: "question" | "example" | "topic" | "reflection"
 }
 
 export interface TrackingModeState {
@@ -20,7 +20,7 @@ export interface TrackingModeState {
   expansions: ExpansionItem[]
   topicTag: string | null
   lastProcessedTimestamp: number
-  silenceTimeout: number | null
+  silenceTimeout: ReturnType<typeof setTimeout> | null
 }
 
 export interface TrackingModeActions {

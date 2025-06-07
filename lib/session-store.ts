@@ -42,7 +42,7 @@ export interface Session {
   audio_blob?: Blob
 }
 
-interface SessionState {
+export interface SessionState {
   currentSession: Session | null
   savedSessions: Session[]
 
@@ -58,6 +58,7 @@ interface SessionState {
   setAudioBlob: (blob: Blob) => void
   getFullTranscriptText: () => string
   updateSessionName: (name: string) => void
+  updateTranscript: (text: string) => void
 }
 
 export const useSessionStore = create<SessionState>()(
@@ -199,6 +200,26 @@ export const useSessionStore = create<SessionState>()(
                 ...current.session_info,
                 name,
               },
+            },
+          })
+        }
+      },
+
+      updateTranscript: (text) => {
+        const current = get().currentSession
+        if (current) {
+          set({
+            currentSession: {
+              ...current,
+              transcript: [
+                ...current.transcript,
+                {
+                  speaker: "",
+                  start_ms: 0,
+                  end_ms: 0,
+                  text,
+                },
+              ],
             },
           })
         }

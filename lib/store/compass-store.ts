@@ -1,60 +1,90 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 import { v4 as uuidv4 } from "uuid"
-import type { CompassStore, Node, Beam } from "../types/compass"
+import type { CompassState, Node as CompassNode, Beam as CompassBeam } from "@/lib/types/compass"
 import { generatePredictionsFromAPI } from "../services/prediction-engine"
 
-interface CompassState {
-  nodes: Node[]
-  beams: Beam[]
-  currentNodeId: string | null
-  goal: string
-  isRecording: boolean
-  isProcessing: boolean
-  mode: "tracking" | "brainstorming"
-  layout: "radial" | "grid"
-  colorScheme: "default" | "dark"
-  highlightDecisions: boolean
-  highlightQuestions: boolean
-  expandLevel: number
-  zoomLevel: number
-  viewportOffset: { x: number; y: number }
+interface CompassStore extends CompassState {
+  setZoomLevel: (level: number) => void
+  setViewportOffset: (offset: { x: number; y: number }) => void
+  setGoal: (goal: string) => void
+  addNode: (node: Omit<CompassNode, "id">) => string
+  updateNode: (id: string, updates: Partial<CompassNode>) => void
+  setCurrentNode: (id: string) => void
+  setProcessing: (isProcessing: boolean) => void
+  setMode: (mode: "tracking" | "guided" | "visualization") => void
+  setLayout: (layout: "radial" | "vertical" | "horizontal") => void
+  setColorScheme: (scheme: "default" | "business" | "professional" | "creative") => void
+  setHighlightDecisions: (highlight: boolean) => void
+  setHighlightQuestions: (highlight: boolean) => void
+  setExpandLevel: (level: number) => void
+  resetCompass: () => void
+  generatePredictions: (input: string) => void
+  matchResponse: (response: string) => void
+  addBeam: (beam: Omit<CompassBeam, "id">) => string
+  updateBeam: (id: string, updates: Partial<CompassBeam>) => void
+  removeBeam: (id: string) => void
 }
 
-const initialState: CompassState = {
-  nodes: [],
-  beams: [],
-  currentNodeId: null,
-  goal: "",
-  isRecording: false,
-  isProcessing: false,
-  mode: "tracking",
-  layout: "radial",
-  colorScheme: "default",
-  highlightDecisions: true,
-  highlightQuestions: true,
-  expandLevel: 1,
-  zoomLevel: 1,
-  viewportOffset: { x: 0, y: 0 },
+const initialState: Omit<CompassStore, keyof CompassState> = {
+  setZoomLevel: () => {},
+  setViewportOffset: () => {},
+  setGoal: () => {},
+  addNode: () => "",
+  updateNode: () => {},
+  setCurrentNode: () => {},
+  setProcessing: () => {},
+  setMode: () => {},
+  resetCompass: () => {},
+  generatePredictions: () => {},
+  matchResponse: () => {},
+  addBeam: () => "",
+  updateBeam: () => {},
+  removeBeam: () => {},
 }
 
 export const useCompassStore = create<CompassStore>()(
   persist(
     (set, get) => ({
+      nodes: [],
+      beams: [],
+      currentNodeId: null,
+      goal: "",
+      isRecording: false,
+      isProcessing: false,
+      mode: "guided",
+      layout: "radial",
+      colorScheme: "default",
+      highlightDecisions: true,
+      highlightQuestions: true,
+      expandLevel: 1,
+      zoomLevel: 1,
+      viewportOffset: { x: 0, y: 0 },
       ...initialState,
 
-      addNode: (nodeData) => {
-        const id = nodeData.id || uuidv4()
-        const newNode: Node = {
+      setZoomLevel: (level: number) => {
+        set({ zoomLevel: level })
+      },
+
+      setViewportOffset: (offset: { x: number; y: number }) => {
+        set({ viewportOffset: offset })
+      },
+
+      addNode: (nodeData: Omit<CompassNode, "id">) => {
+        const id = uuidv4()
+        const newNode: CompassNode = {
           id,
           type: nodeData.type || "user",
           text: nodeData.text || "",
-          fromNodeId: nodeData.fromNodeId || null,
-          speaker: nodeData.speaker,
+          fromNodeId: nodeData.fromNodeId,
+          speaker: nodeData.speaker || "user",
           confidence: nodeData.confidence,
           position: nodeData.position,
           isActive: nodeData.isActive || false,
           isHighlighted: nodeData.isHighlighted || false,
+          expandedTalkingPoints: nodeData.expandedTalkingPoints,
+          intent: nodeData.intent,
+          goalProximity: nodeData.goalProximity,
         }
 
         set((state) => ({
@@ -62,16 +92,29 @@ export const useCompassStore = create<CompassStore>()(
           currentNodeId: nodeData.isActive ? id : state.currentNodeId,
         }))
 
+        // If this is a goal node, create initial beams
+        if (nodeData.type === "goal") {
+          // No beams needed for goal node as it's the root
+        } else if (nodeData.fromNodeId) {
+          // Create a beam from the parent node to this node
+          get().addBeam({
+            fromNodeId: nodeData.fromNodeId,
+            toNodeId: id,
+            thickness: nodeData.type === "predicted" ? 0.8 : 1,
+            isActive: nodeData.isActive || false,
+          })
+        }
+
         return id
       },
 
-      updateNode: (id, updates) => {
+      updateNode: (id: string, updates: Partial<CompassNode>) => {
         set((state) => ({
           nodes: state.nodes.map((node) => (node.id === id ? { ...node, ...updates } : node)),
         }))
       },
 
-      removeNode: (id) => {
+      removeNode: (id: string) => {
         set((state) => ({
           nodes: state.nodes.filter((node) => node.id !== id),
           beams: state.beams.filter((beam) => beam.fromNodeId !== id && beam.toNodeId !== id),
@@ -80,12 +123,12 @@ export const useCompassStore = create<CompassStore>()(
         }))
       },
 
-      addBeam: (beamData) => {
-        const id = beamData.id || uuidv4()
-        const newBeam: Beam = {
+      addBeam: (beamData: Omit<CompassBeam, "id">) => {
+        const id = uuidv4()
+        const newBeam: CompassBeam = {
           id,
-          fromNodeId: beamData.fromNodeId || "",
-          toNodeId: beamData.toNodeId || "",
+          fromNodeId: beamData.fromNodeId,
+          toNodeId: beamData.toNodeId,
           thickness: beamData.thickness || 1,
           isActive: beamData.isActive || false,
         }
@@ -133,7 +176,7 @@ export const useCompassStore = create<CompassStore>()(
         }
       },
 
-      setGoal: (goal) => {
+      setGoal: (goal: string) => {
         set({ goal })
 
         // If this is a new goal, create a goal node
@@ -141,20 +184,22 @@ export const useCompassStore = create<CompassStore>()(
           const goalNodeId = get().addNode({
             type: "goal",
             text: goal,
+            fromNodeId: null,
             isActive: true,
+            speaker: "system"
           })
           set({ currentNodeId: goalNodeId })
         }
       },
 
-      setMode: (mode) => set({ mode }),
-      setLayout: (layout) => set({ layout }),
-      setColorScheme: (colorScheme) => set({ colorScheme }),
+      setMode: (mode: "tracking" | "guided" | "visualization") => set({ mode }),
+      setLayout: (layout: "radial" | "vertical" | "horizontal") => set({ layout }),
+      setColorScheme: (scheme: "default" | "business" | "professional" | "creative") => set({ colorScheme }),
       setHighlightDecisions: (highlightDecisions) => set({ highlightDecisions }),
       setHighlightQuestions: (highlightQuestions) => set({ highlightQuestions }),
       setExpandLevel: (expandLevel) => set({ expandLevel }),
-      setZoomLevel: (zoomLevel) => set({ zoomLevel }),
-      setViewportOffset: (viewportOffset) => set({ viewportOffset }),
+      setZoomLevel: (level: number) => set({ zoomLevel }),
+      setViewportOffset: (offset: { x: number; y: number }) => set({ viewportOffset }),
 
       resetCompass: () => {
         set({
@@ -263,72 +308,53 @@ export const useCompassStore = create<CompassStore>()(
           set({ isProcessing: false })
         }
       },
+
+      // Helper function to build conversation history from nodes
+      buildConversationHistory: (nodes: CompassNode[], currentNodeId: string): string => {
+        const history: string[] = []
+        let nodeId: string | null = currentNodeId
+
+        // Build history in reverse (from current node back to goal)
+        while (nodeId) {
+          const node = nodes.find((n) => n.id === nodeId)
+          if (!node) break
+
+          // Add to history if it's a user or actual node (not predictions)
+          if (node.type === "user" || node.type === "actual") {
+            const speaker = node.speaker === "user" ? "User" : "Other"
+            history.unshift(`${speaker}: ${node.text}`)
+          }
+
+          nodeId = node.fromNodeId
+        }
+
+        return history.join("\n")
+      }
     }),
     {
-      name: "compass-storage",
-      partialize: (state) => ({
-        goal: state.goal,
-        mode: state.mode,
-        layout: state.layout,
-        colorScheme: state.colorScheme,
-        highlightDecisions: state.highlightDecisions,
-        highlightQuestions: state.highlightQuestions,
-        expandLevel: state.expandLevel,
-      }),
-    },
-  ),
+      name: "compass-store",
+    }
+  )
 )
 
-// Helper function to build conversation history from nodes
-function buildConversationHistory(nodes: Node[], currentNodeId: string): string {
-  const history: string[] = []
-  let nodeId: string | null = currentNodeId
+// Helper function to find the best match among predictions
+function findBestMatch(text: string, predictions: CompassNode[]): CompassNode | undefined {
+  let bestMatch: CompassNode | undefined = undefined
+  let bestConfidence = 0
 
-  // Build history in reverse (from current node back to goal)
-  while (nodeId) {
-    const node = nodes.find((n) => n.id === nodeId)
-    if (!node) break
-
-    // Add to history if it's a user or actual node (not predictions)
-    if (node.type === "user" || node.type === "actual") {
-      const speaker = node.speaker === "user" ? "User" : "Other"
-      history.unshift(`${speaker}: ${node.text}`)
+  predictions.forEach((prediction) => {
+    const confidence = calculateConfidence(text, prediction.text)
+    if (confidence > bestConfidence) {
+      bestConfidence = confidence
+      bestMatch = prediction
     }
+  })
 
-    nodeId = node.fromNodeId
-  }
-
-  return history.join("\n")
+  return bestMatch
 }
 
-// Helper function to find the best matching prediction
-function findBestMatch(text: string, predictions: Node[]): Node | null {
-  if (!predictions.length) return null
-
-  // Simple matching algorithm - could be improved with more sophisticated NLP
-  const matches = predictions.map((node) => ({
-    node,
-    score: calculateSimilarity(text.toLowerCase(), node.text.toLowerCase()),
-  }))
-
-  // Sort by score (highest first)
-  matches.sort((a, b) => b.score - a.score)
-
-  // Return the best match if it's above a threshold
-  return matches[0].score > 0.6 ? matches[0].node : null
-}
-
-// Simple text similarity function
-function calculateSimilarity(a: string, b: string): number {
-  // This is a very basic implementation
-  // Could be improved with more sophisticated NLP techniques
-  const wordsA = a.split(/\s+/)
-  const wordsB = b.split(/\s+/)
-
-  let matches = 0
-  for (const wordA of wordsA) {
-    if (wordsB.includes(wordA)) matches++
-  }
-
-  return matches / Math.max(wordsA.length, wordsB.length)
+// Helper function to calculate confidence between two strings
+function calculateConfidence(text1: string, text2: string): number {
+  // Implement your confidence calculation logic here
+  return 0.5 // Placeholder return, actual implementation needed
 }

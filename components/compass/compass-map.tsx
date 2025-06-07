@@ -27,16 +27,17 @@ export function CompassMap({ className }: CompassMapProps) {
   // Calculate node positions based on layout
   const calculateNodePositions = () => {
     const positionedNodes = [...nodes]
-
     if (positionedNodes.length === 0) return positionedNodes
 
     // Find the goal node (root)
     const rootNode = positionedNodes.find((n) => n.type === "goal") || positionedNodes[0]
+    if (!rootNode) return positionedNodes
+
     const rootIndex = positionedNodes.findIndex((n) => n.id === rootNode.id)
 
     // Start with the root node in the center
     const centerX = mapDimensions.width / 2
-    const centerY = mapDimensions.height / 2
+    const centerY = mapDimensions.height / 4 // Position root node at 1/4 from top
 
     positionedNodes[rootIndex] = {
       ...rootNode,
@@ -47,9 +48,9 @@ export function CompassMap({ className }: CompassMapProps) {
     const nodeMap = new Map<string, Node>()
     const childrenMap = new Map<string, string[]>()
 
+    // First pass: build node map and find direct children
     positionedNodes.forEach((node) => {
       nodeMap.set(node.id, node)
-
       if (node.fromNodeId) {
         const children = childrenMap.get(node.fromNodeId) || []
         children.push(node.id)
@@ -57,77 +58,51 @@ export function CompassMap({ className }: CompassMapProps) {
       }
     })
 
-    // Position nodes based on layout
-    const positionNode = (nodeId: string, level: number, index: number, totalSiblings: number) => {
+    // Position nodes in a tree layout
+    const positionNode = (nodeId: string, level: number, index: number, totalSiblings: number, parentX: number, parentY: number) => {
       const node = nodeMap.get(nodeId)
       if (!node || node.position) return
 
-      const parentNode = node.fromNodeId ? nodeMap.get(node.fromNodeId) : null
-      if (!parentNode || !parentNode.position) return
+      const verticalSpacing = mapDimensions.height / 4 // Adjust vertical spacing based on map height
+      const horizontalSpacing = Math.min(150, mapDimensions.width / (totalSiblings + 1)) // Adjust horizontal spacing based on map width
+      const levelWidth = totalSiblings * horizontalSpacing
+      const startX = parentX - levelWidth / 2 + horizontalSpacing / 2
 
-      const { x: parentX, y: parentY } = parentNode.position
-      let x = parentX
-      let y = parentY
+      // Calculate position
+      const x = startX + index * horizontalSpacing
+      const y = parentY + verticalSpacing
 
-      const spacing = 120 // Base spacing between nodes
-      const levelSpacing = spacing * (level * 0.5 + 1)
-
-      if (layout === "radial") {
-        // Radial layout - nodes are positioned in a circle around their parent
-        const angleStep = (2 * Math.PI) / totalSiblings
-        const angle = angleStep * index - Math.PI / 2 // Start from the top
-
-        x = parentX + Math.cos(angle) * levelSpacing
-        y = parentY + Math.sin(angle) * levelSpacing
-      } else if (layout === "vertical") {
-        // Vertical layout - nodes flow from top to bottom
-        const siblingWidth = totalSiblings * spacing
-        const startX = parentX - siblingWidth / 2 + spacing / 2
-
-        x = startX + index * spacing
-        y = parentY + levelSpacing
-      } else if (layout === "horizontal") {
-        // Horizontal layout - nodes flow from left to right
-        const siblingHeight = totalSiblings * spacing
-        const startY = parentY - siblingHeight / 2 + spacing / 2
-
-        x = parentX + levelSpacing
-        y = startY + index * spacing
-      }
-
-      // Update the node with its position
-      nodeMap.set(nodeId, {
+      // Update node position
+      const updatedNode = {
         ...node,
         position: { x, y },
-      })
+      }
+      nodeMap.set(nodeId, updatedNode)
 
       // Position children
       const children = childrenMap.get(nodeId) || []
       children.forEach((childId, childIndex) => {
-        positionNode(childId, level + 1, childIndex, children.length)
+        positionNode(childId, level + 1, childIndex, children.length, x, y)
       })
     }
 
     // Position all nodes starting from the root
     const rootChildren = childrenMap.get(rootNode.id) || []
     rootChildren.forEach((childId, index) => {
-      positionNode(childId, 1, index, rootChildren.length)
+      positionNode(childId, 1, index, rootChildren.length, centerX, centerY)
     })
 
-    // Update the nodes array with positioned nodes
     return Array.from(nodeMap.values())
   }
 
-  // Get positioned nodes
-  const positionedNodes = calculateNodePositions()
-
-  // Handle resize
+  // Get positioned nodes and update dimensions on mount and resize
   useEffect(() => {
     const handleResize = () => {
       if (mapRef.current) {
+        const rect = mapRef.current.getBoundingClientRect()
         setMapDimensions({
-          width: mapRef.current.clientWidth,
-          height: mapRef.current.clientHeight,
+          width: rect.width,
+          height: rect.height,
         })
       }
     }
@@ -139,6 +114,9 @@ export function CompassMap({ className }: CompassMapProps) {
       window.removeEventListener("resize", handleResize)
     }
   }, [])
+
+  // Get positioned nodes
+  const positionedNodes = calculateNodePositions()
 
   // Handle dragging
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -208,11 +186,11 @@ export function CompassMap({ className }: CompassMapProps) {
           className="absolute w-full h-full"
           style={{
             transform: `scale(${zoomLevel}) translate(${viewportOffset.x / zoomLevel}px, ${viewportOffset.y / zoomLevel}px)`,
-            transformOrigin: "center",
+            transformOrigin: "top center",
             transition: isDragging ? "none" : "transform 0.3s ease-out",
           }}
         >
-          {/* Render beams */}
+          {/* Render beams (connections between nodes) */}
           {beams.map((beam) => {
             const fromNode = positionedNodes.find((n) => n.id === beam.fromNodeId)
             const toNode = positionedNodes.find((n) => n.id === beam.toNodeId)
@@ -226,7 +204,7 @@ export function CompassMap({ className }: CompassMapProps) {
                 startY={fromNode.position.y}
                 endX={toNode.position.x}
                 endY={toNode.position.y}
-                thickness={beam.thickness * 2}
+                thickness={2}
                 isActive={beam.isActive}
                 animated={toNode.type === "predicted"}
               />
