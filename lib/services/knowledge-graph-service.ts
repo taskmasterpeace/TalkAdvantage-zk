@@ -78,6 +78,23 @@ export interface ContextPack {
   updatedAt: Date;
 }
 
+interface DocumentChunk {
+  contextPackId: any;
+  chunkIndex: any;
+  id: string;
+  userId: string;
+  content: string;
+  metadata: {
+    name: string;
+    file: string;
+    tags?: string[];
+    chunkIndex: number;
+    totalChunks: number;
+  };
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 interface WeaviateResponse {
   id: string;
   properties: {
@@ -551,6 +568,43 @@ async function initializeKnowledgeGraphSchema() {
                   skip: true
                 }
               }
+            }
+          ]
+        })
+        .do();
+    }
+
+    // Create DocumentChunk class if it doesn't exist
+    const documentChunkClassExists = schema.classes?.some(c => c.class === 'DocumentChunk');
+    if (!documentChunkClassExists) {
+      await client.schema
+        .classCreator()
+        .withClass({
+          class: 'DocumentChunk',
+          description: 'A chunk of a document with vector embeddings',
+          vectorizer: 'text2vec-openai',
+          moduleConfig: {
+            'text2vec-openai': {
+              model: 'ada',
+              modelVersion: '002',
+              type: 'text'
+            }
+          },
+          properties: [
+            {
+              name: 'content',
+              dataType: ['text'],
+              description: 'The content of the document chunk'
+            },
+            {
+              name: 'userId',
+              dataType: ['string'],
+              description: 'ID of the user who owns the document'
+            },
+            {
+              name: 'createdAt',
+              dataType: ['date'],
+              description: 'When the chunk was created'
             }
           ]
         })
@@ -1410,6 +1464,174 @@ export const knowledgeGraphService = {
       }));
     } catch (error) {
       console.error('Error getting all context packs:', error);
+      throw error;
+    }
+  },
+
+  // Document Chunk methods
+  async createDocumentChunk(chunk: Omit<DocumentChunk, 'id' | 'createdAt' | 'updatedAt'>): Promise<DocumentChunk> {
+    await ensureSchemaInitialized();
+    
+    try {
+      const result = await client.data
+        .creator()
+        .withClassName('DocumentChunk')
+        .withProperties({
+          ...chunk,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        })
+        .do() as WeaviateResponse;
+
+      if (!result.properties) {
+        throw new Error('No properties returned from Weaviate');
+      }
+
+      return {
+        ...chunk,
+        id: result.id,
+        createdAt: new Date(result.properties.createdAt),
+        updatedAt: new Date(result.properties.updatedAt)
+      };
+    } catch (error) {
+      console.error('Error creating document chunk:', error);
+      throw error;
+    }
+  },
+
+  async searchDocumentChunks(query: string, userId: string, limit: number = 5): Promise<DocumentChunk[]> {
+    await ensureSchemaInitialized();
+    
+    try {
+      const result = await client.graphql
+        .get()
+        .withClassName('DocumentChunk')
+        .withFields(['content', 'userId', 'createdAt', '_additional { id }'])
+        .withNearText({ concepts: [query] })
+        .withWhere({
+          operator: 'Equal',
+          path: ['userId'],
+          valueString: userId
+        })
+        .withLimit(limit)
+        .do();
+
+      return result.data.Get.DocumentChunk.map((chunk: any) => ({
+        content: chunk.content,
+        userId: chunk.userId,
+        similarity:chunk.similarity,
+        createdAt: new Date(chunk.createdAt)
+      }));
+    } catch (error) {
+      console.error('Error searching document chunks:', error);
+      throw error;
+    }
+  },
+
+  async deleteDocumentChunks(userId: string, file: string): Promise<boolean> {
+    await ensureSchemaInitialized();
+    
+    try {
+      const result = await client.graphql
+        .get()
+        .withClassName('DocumentChunk')
+        .withFields('_additional { id }')
+        .withWhere({
+          operator: 'And',
+          operands: [
+            {
+              operator: 'Equal',
+              path: ['userId'],
+              valueString: userId
+            },
+            {
+              operator: 'Equal',
+              path: ['metadata', 'file'],
+              valueString: file
+            }
+          ]
+        })
+        .do();
+
+      if (result.data?.Get?.DocumentChunk) {
+        for (const chunk of result.data.Get.DocumentChunk) {
+          await client.data
+            .deleter()
+            .withClassName('DocumentChunk')
+            .withId(chunk._additional.id)
+            .do();
+        }
+      }
+      return true;
+    } catch (error) {
+      console.error('Error deleting document chunks:', error);
+      throw error;
+    }
+  },
+
+  async getDocumentChunks(userId: string, contextPackId?: string): Promise<DocumentChunk[]> {
+    try {
+      const whereFilter: any = {
+        operator: 'And',
+        operands: [
+          {
+            path: ['userId'],
+            operator: 'Equal',
+            valueString: userId
+          }
+        ]
+      };
+
+      if (contextPackId) {
+        whereFilter.operands.push({
+          path: ['contextPackId'],
+          operator: 'Equal',
+          valueString: contextPackId
+        });
+      }
+
+      const result = await client.graphql
+        .get()
+        .withClassName('DocumentChunk')
+        .withFields(['content', 'userId', 'createdAt', '_additional { id }'])
+        .withWhere(whereFilter)
+        .do();
+
+      return result.data.Get.DocumentChunk.map((chunk: any) => ({
+        content: chunk.content,
+        userId: chunk.userId,
+        createdAt: new Date(chunk.createdAt)
+      }));
+    } catch (error) {
+      console.error('Error getting document chunks:', error);
+      throw error;
+    }
+  },
+
+  async getSimilarDocumentChunks(userId: string, text: string, limit: number = 3): Promise<DocumentChunk[]> {
+    try {
+      const result = await client.graphql
+        .get()
+        .withClassName('DocumentChunk')
+        .withFields(['content', 'userId', 'createdAt', '_additional { id }'])
+        .withWhere({
+          operator: 'Equal',
+          valueString: userId,
+          path: ['userId']
+        })
+        .withNearText({
+          concepts: [text]
+        })
+        .withLimit(limit)
+        .do();
+
+      return result.data.Get.DocumentChunk.map((chunk: any) => ({
+        content: chunk.content,
+        userId: chunk.userId,
+        createdAt: new Date(chunk.createdAt)
+      }));
+    } catch (error) {
+      console.error('Error getting similar document chunks:', error);
       throw error;
     }
   }

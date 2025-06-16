@@ -97,6 +97,7 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
     systemProps: settings.systemProps,
     storageLocation: settings.storageLocation,
     silenceDetection: settings.silenceDetection,
+    contextPackEnabled: settings.contextPackEnabled,
   })
 
   // Update local state when settings change
@@ -117,6 +118,7 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
         systemProps: settings.systemProps,
         storageLocation: settings.storageLocation,
         silenceDetection: settings.silenceDetection,
+        contextPackEnabled: settings.contextPackEnabled,
       })
 
       // Reset key status when opening modal
@@ -236,6 +238,8 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
     settings.setSilenceThresholdMinutes(localSettings.silenceDetection.thresholdMinutes)
     settings.setSilenceAutoStopSeconds(localSettings.silenceDetection.autoStopSeconds)
 
+    settings.setContextPackEnabled(localSettings.contextPackEnabled)
+
     toast({
       variant: "default",
       title: "Settings Saved",
@@ -264,6 +268,7 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
         systemProps: settings.systemProps,
         storageLocation: settings.storageLocation,
         silenceDetection: settings.silenceDetection,
+        contextPackEnabled: settings.contextPackEnabled,
       })
 
       toast({
@@ -467,6 +472,18 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
                       </SelectItem>
                     </SelectContent>
                   </Select>
+                </div>
+                {/* Context Pack Toggle */}
+                <div className="flex items-center justify-between">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="context-pack-enabled">Enable Context Pack for Analysis</Label>
+                    <div className="text-sm text-muted-foreground">All analysis will use Context Packs for context if enabled.</div>
+                  </div>
+                  <Switch
+                    id="context-pack-enabled"
+                    checked={localSettings.contextPackEnabled}
+                    onCheckedChange={(checked) => setLocalSettings({ ...localSettings, contextPackEnabled: checked })}
+                  />
                 </div>
               </div>
             </div>
@@ -1398,6 +1415,26 @@ export default function SettingsModal({ open, onOpenChange }: SettingsModalProps
                     onCheckedChange={settings.setEnableDragDrop}
                     className="data-[state=checked]:bg-blue-600"
                   />
+                </div>
+                
+                <div className="border-t pt-4 mt-2">
+                  <div className="flex items-center justify-between space-x-2 mb-4">
+                    <Label htmlFor="talking-points-enabled" className="flex flex-col space-y-1">
+                      <span className="text-base font-medium">Enable Talking Points</span>
+                      <span className="font-normal text-sm text-muted-foreground">
+                        When enabled: real-time AI-powered talking points will be generated and displayed.
+                      </span>
+                      <span className="font-normal text-sm text-muted-foreground mt-1">
+                        When disabled: talking points widget will be hidden and no processing will occur.
+                      </span>
+                    </Label>
+                    <Switch
+                      id="talking-points-enabled"
+                      checked={settings.talkingPointsEnabled}
+                      onCheckedChange={settings.setTalkingPointsEnabled}
+                      className="data-[state=checked]:bg-blue-600"
+                    />
+                  </div>
                 </div>
                 
                 <div className="border-t pt-4 mt-2 border-dashed border-muted flex flex-col gap-4 items-center">

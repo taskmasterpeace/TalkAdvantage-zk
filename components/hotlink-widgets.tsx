@@ -9,6 +9,13 @@ import { useTemplateStore } from '@/lib/template-store';
 import { useToast } from '@/hooks/use-toast';
 import { HotLinkWidget } from '@/lib/hooks/use-hotlink-detection';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
 const STORAGE_KEY = 'hotlink-widgets';
 
@@ -165,11 +172,19 @@ const HotLinkWidgets: React.FC = () => {
   const [widgets, setWidgets] = useState<HotLinkWidget[]>(() => {
     if (typeof window !== 'undefined') {
       const savedWidgets = localStorage.getItem(STORAGE_KEY);
-      return savedWidgets ? JSON.parse(savedWidgets) : defaultWidgets;
+      if (savedWidgets) {
+        const parsedWidgets = JSON.parse(savedWidgets);
+        // Ensure each widget has a model, defaulting to Mistral 7B if not set
+        return parsedWidgets.map((widget: HotLinkWidget) => ({
+          ...widget,
+          model: widget.model || 'mistralai/mistral-7b-instruct'
+        }));
+      }
     }
     return defaultWidgets;
   });
 
+  // Save to localStorage whenever widgets change
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(widgets));
   }, [widgets]);
@@ -181,7 +196,7 @@ const HotLinkWidgets: React.FC = () => {
     name: '',
     triggerWords: [],
     prompt: '',
-    model: 'perplexity'
+    model: 'mistralai/mistral-7b-instruct' // Default to Mistral 7B
   });
   const [newTriggerWord, setNewTriggerWord] = useState('');
 
@@ -190,14 +205,37 @@ const HotLinkWidgets: React.FC = () => {
   const [selectedProfile, setSelectedProfile] = useState<string>('');
   const [triggerWord, setTriggerWord] = useState('');
 
+  const [showModelChangeDialog, setShowModelChangeDialog] = useState(false);
+  const [modelChangeInfo, setModelChangeInfo] = useState({ widgetName: '', newModel: '' });
+
+  // Add state for save dialog
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [saveInfo, setSaveInfo] = useState({ widgetName: '', model: '' });
+
   const handleEdit = (widget: HotLinkWidget) => {
     setEditingWidget({ ...widget });
   };
 
   const handleSave = () => {
     if (editingWidget) {
-      setWidgets(widgets.map(w => w.id === editingWidget.id ? editingWidget : w));
+      const updatedWidgets = widgets.map(w => w.id === editingWidget.id ? editingWidget : w);
+      setWidgets(updatedWidgets);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedWidgets));
+      
+      // Show save dialog
+      setSaveInfo({
+        widgetName: editingWidget.name,
+        model: editingWidget.model
+      });
+      setShowSaveDialog(true);
+      
       setEditingWidget(null);
+      
+      // Show confirmation toast
+      toast({
+        title: "Widget Updated",
+        description: `Updated ${editingWidget.name} with model ${editingWidget.model}`,
+      });
     }
   };
 
@@ -250,7 +288,7 @@ const HotLinkWidgets: React.FC = () => {
         name: '',
         triggerWords: [],
         prompt: '',
-        model: 'perplexity'
+        model: 'mistralai/mistral-7b-instruct'
       });
     }
   };
@@ -293,7 +331,7 @@ const HotLinkWidgets: React.FC = () => {
       triggerWords: [triggerWord.toLowerCase()],
       name: `${profile.name} Analysis`,
       prompt: combinedPrompt,
-      model: 'requestify' as const
+      model: 'mistralai/mistral-7b-instruct'
     };
 
     // Add to widgets
@@ -310,6 +348,31 @@ const HotLinkWidgets: React.FC = () => {
       title: "Profile Imported",
       description: `Analytics profile "${profile.name}" has been added as a HotLink widget.`,
     });
+  };
+
+  const handleModelChange = (value: string) => {
+    if (editingWidget) {
+      setEditingWidget({ ...editingWidget, model: value });
+      // Save immediately when model changes
+      const updatedWidgets = widgets.map(w => 
+        w.id === editingWidget.id ? { ...editingWidget, model: value } : w
+      );
+      setWidgets(updatedWidgets);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedWidgets));
+      
+      // Show both toast and dialog
+      toast({
+        title: "Model Updated",
+        description: `Changed model to ${value}`,
+      });
+
+      // Show dialog
+      setModelChangeInfo({
+        widgetName: editingWidget.name,
+        newModel: value
+      });
+      setShowModelChangeDialog(true);
+    }
   };
 
   return (
@@ -458,7 +521,7 @@ const HotLinkWidgets: React.FC = () => {
                   <Label>Model</Label>
                   <Select
                     value={editingWidget.model}
-                    onValueChange={(value) => setEditingWidget({ ...editingWidget, model: value })}
+                    onValueChange={handleModelChange}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Select model" />
@@ -591,6 +654,40 @@ const HotLinkWidgets: React.FC = () => {
           </Button>
         </div>
       </Card>
+
+      {/* Model Change Dialog */}
+      <Dialog open={showModelChangeDialog} onOpenChange={setShowModelChangeDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Model Updated</DialogTitle>
+            <DialogDescription>
+              Successfully changed the model for widget "{modelChangeInfo.widgetName}" to {modelChangeInfo.newModel}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end">
+            <Button onClick={() => setShowModelChangeDialog(false)}>
+              OK
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Save Dialog */}
+      <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Widget Saved</DialogTitle>
+            <DialogDescription>
+              Successfully saved widget "{saveInfo.widgetName}" with model {saveInfo.model}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end">
+            <Button onClick={() => setShowSaveDialog(false)}>
+              OK
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

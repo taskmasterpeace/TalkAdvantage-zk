@@ -32,6 +32,7 @@ interface SettingsState {
   widgetSizes: Record<string, { width: number, height: number }>
   minimizedWidgets: string[]
   maximizedWidget: string | null
+  talkingPointsEnabled: boolean
 
   // API Keys
   assemblyAIKey: string
@@ -79,6 +80,9 @@ interface SettingsState {
   // Storage Settings
   storageLocation: StorageLocationType
 
+  // Context Pack
+  contextPackEnabled: boolean
+
   // Methods
   setTheme: (theme: ThemeOption) => void
   setAutoSave: (autoSave: boolean) => void
@@ -92,6 +96,8 @@ interface SettingsState {
   setAIRefererURL: (url: string) => void
   setAISiteName: (name: string) => void
   setStorageLocation: (location: StorageLocationType) => void
+  setContextPackEnabled: (enabled: boolean) => void
+  setTalkingPointsEnabled: (enabled: boolean) => void
 
   // System Props Methods
   setCuriosityEngineEnabled: (enabled: boolean) => void
@@ -156,6 +162,7 @@ const defaultSettings = {
     "curiosity-engine-widget"
   ],
   maximizedWidget: null,
+  talkingPointsEnabled: true,
 
   // Default Silence Detection Settings
   silenceDetection: {
@@ -168,7 +175,7 @@ const defaultSettings = {
   openRouterKey: "",
   aiBaseURL: "https://api.openai.com/v1",
   aiProvider: "openai" as "openai" | "openrouter" | "custom",
-  aiModel: "gpt-4o",
+  aiModel: "mistralai/mistral-7b-instruct",
   aiRefererURL: typeof window !== "undefined" ? window.location.origin : "",
   aiSiteName: "TalkAdvantage",
 
@@ -280,6 +287,9 @@ Respond with ONLY the JSON object.`,
   },
 
   storageLocation: "local" as StorageLocationType,
+
+  // Context Pack
+  contextPackEnabled: true,
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -299,6 +309,8 @@ export const useSettingsStore = create<SettingsState>()(
       setAIRefererURL: (aiRefererURL) => set({ aiRefererURL }),
       setAISiteName: (aiSiteName) => set({ aiSiteName }),
       setStorageLocation: (storageLocation) => set({ storageLocation }),
+      setContextPackEnabled: (enabled) => set({ contextPackEnabled: enabled }),
+      setTalkingPointsEnabled: (enabled) => set({ talkingPointsEnabled: enabled }),
 
       // System Props Methods
       setCuriosityEngineEnabled: (enabled) =>
@@ -630,6 +642,8 @@ export const useSettingsStore = create<SettingsState>()(
         widgetSizes: state.widgetSizes,
         minimizedWidgets: state.minimizedWidgets,
         maximizedWidget: state.maximizedWidget,
+        contextPackEnabled: state.contextPackEnabled,
+        talkingPointsEnabled: state.talkingPointsEnabled,
       }),
     },
   ),
