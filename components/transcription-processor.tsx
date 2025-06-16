@@ -168,7 +168,7 @@ export default function TranscriptionProcessor({
           if (!recording) {
             throw new Error("Recording not found");
           }
-
+          
           // Format transcript with timestamps if words data is available
           let formattedTranscript = data.transcript;
           if (data.words && data.words.length > 0) {
@@ -262,14 +262,14 @@ export default function TranscriptionProcessor({
             end_ms: word.end,
             text: word.text,
           }));
-
+  
           const { error: segmentsError } = await supabase.from("transcript_segments").insert(dbSegments);
-
+  
           if (segmentsError) {
             console.error("Error inserting segments:", segmentsError);
             // Continue even if segments insertion fails
           }
-        }
+          }
 
         // Update the transcript with formatted text
         const { error: transcriptError } = await supabase
@@ -281,7 +281,7 @@ export default function TranscriptionProcessor({
           console.error("Error updating transcript:", transcriptError);
           // Continue even if transcript update fails
         }
-      }
+        }
 
       // Update UI for success (same for both local and cloud)
       setProgress(100)

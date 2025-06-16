@@ -19,7 +19,7 @@ function getLatestWords(text: string, maxWords: number = MAX_WORDS): string {
 
 export async function POST(request: Request) {
   try {
-    const { transcript, template } = await request.json()
+    const { transcript, template, contextPack } = await request.json()
 
     // Debug logging
     console.log("Received template:", JSON.stringify(template, null, 2))
@@ -39,7 +39,25 @@ export async function POST(request: Request) {
     console.log("Using text length:", latestText.length)
 
     // Prepare the prompts
-    const systemPrompt = template.system_prompt || "You are an AI assistant that analyzes conversations."
+    let systemPrompt = template.system_prompt || "You are an AI assistant that analyzes conversations."
+    
+    // Get today's date
+    const today = new Date().toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
+    // Add context pack information to system prompt if available
+    if (contextPack) {
+      systemPrompt += `\n\n all Context Information with relationship:\n${JSON.stringify(contextPack)}`
+      console.log("Context pack:", contextPack ? "Present" : "Not present",systemPrompt)
+    }
+    
+    // Add today's date to system prompt
+    systemPrompt += `\n\nToday's date is ${today}.`
+    
     const userPrompt = template.user_prompt || "Analyze this transcript."
     const templatePrompt = template.template_prompt || ""
 
@@ -66,11 +84,11 @@ export async function POST(request: Request) {
         messages: [
           {
             role: "system",
-            content: `${systemPrompt} `
+            content: systemPrompt
           }, 
           {
             role: "user",
-            content: `${userPrompt}\n\n${templatePrompt}\nTranscript:\n${latestText}`
+            content: `${userPrompt}\n\n${templatePrompt}\n ==>Transcript:\n${latestText}`
           }
         ],
         max_tokens: 2000,

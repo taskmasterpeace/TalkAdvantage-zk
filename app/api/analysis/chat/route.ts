@@ -189,9 +189,15 @@ export async function POST(req: Request) {
       }).join('\n\n');
 
       const activeTranscripts = searchResults.map((result: any) => result.name);
-console.log(context,"context")
+      console.log(context,"context")
+
       // Create system message with context
-      const systemMessage = `You are an AI assistant analyzing transcripts. Use the following context from the transcripts to answer the question. If the context doesn't contain relevant information, say so.
+      const systemMessage = `You are an AI assistant analyzing transcripts. Today's date is ${new Date().toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      })}. Use the following context from the transcripts to answer the question. If the context doesn't contain relevant information, say so.
 
 Context:
 ${context}`;

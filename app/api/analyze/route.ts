@@ -36,6 +36,15 @@ export async function POST(request: Request) {
     // Prepare the prompt using the template
     const templateObj = template as AnalyticsProfile
     const systemPrompt = templateObj.system_prompt
+
+    // Get today's date
+    const today = new Date().toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+
     const userPrompt = `${templateObj.user_prompt}\n\n${templateObj.template_prompt}\n\nTranscript:\n${transcript}`
 
     // Make API request
@@ -44,7 +53,7 @@ export async function POST(request: Request) {
       messages: [
         {
           role: "system",
-          content: systemPrompt,
+          content: `${systemPrompt}\n\nToday's date is ${today}.`,
         },
         {
           role: "user",

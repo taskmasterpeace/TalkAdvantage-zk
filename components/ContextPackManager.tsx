@@ -7,6 +7,8 @@ import { Label } from './ui/label';
 import { User, Users, FileText, Save, X, Plus, CheckCircle, UserCircle2, Tag, FileCheck2, FileUp } from 'lucide-react';
 import { useAuth } from '@/lib/supabase/auth-context';
 import { documentsService } from '@/lib/supabase/documents-service';
+import { documentProcessorService } from '../lib/services/document-processor-service';
+import { knowledgeGraphService } from '../lib/services/knowledge-graph-service';
 
 // Types
 interface Participant {
@@ -122,7 +124,9 @@ export default function ContextPackManager({ onSave, onClose }: { onSave?: (pack
   // File upload handler
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file) {
+      return;
+    }
     if (!user) {
       alert('You must be logged in to upload files.');
       return;
@@ -134,12 +138,17 @@ export default function ContextPackManager({ onSave, onClose }: { onSave?: (pack
     setUploading(true);
     setUploadSuccess(false);
     try {
-      const uploadedDoc = await documentsService.createDocument(user.id, file, {
+      // Process and store document chunks
+      const chunks = await documentProcessorService.processDocument(file, {
         name: document.name,
-        description: document.name,
-        tags: document.tags ? JSON.stringify(document.tags) : undefined
+        tags: document.tags
       });
-      setDocument({ ...document, file: uploadedDoc.storagePath });
+      
+      // Store chunks in Weaviate
+      await documentProcessorService.storeDocumentChunks(user.id, chunks);
+
+      // Store document reference in context pack
+      setDocument({ ...document, file: file.name });
       setUploadSuccess(true);
     } catch (err) {
       console.error('Upload failed:', err);
@@ -268,8 +277,17 @@ export default function ContextPackManager({ onSave, onClose }: { onSave?: (pack
             <div className="flex gap-2 mb-2 items-center">
               <Input className="rounded-lg" value={document.name} onChange={e => setDocument({ ...document, name: e.target.value })} placeholder="Document Name" />
               <label className="inline-flex items-center cursor-pointer">
-                <input type="file" onChange={handleFileUpload} disabled={uploading} className="hidden" />
-                <span className={`px-3 py-1 rounded-full bg-primary/10 text-primary flex items-center gap-1 hover:bg-primary/20 transition ${uploading ? 'opacity-50' : ''}`}> <FileUp className="h-4 w-4" /> {uploading ? 'Uploading...' : 'Upload'} </span>
+                <input 
+                  type="file" 
+                  onChange={handleFileUpload} 
+                  disabled={uploading} 
+                  className="hidden" 
+                  accept=".pdf,.doc,.docx,.txt"
+                />
+                <span className={`px-3 py-1 rounded-full bg-primary/10 text-primary flex items-center gap-1 hover:bg-primary/20 transition ${uploading ? 'opacity-50' : ''}`}> 
+                  <FileUp className="h-4 w-4" /> 
+                  {uploading ? 'Uploading...' : 'Upload'} 
+                </span>
               </label>
               {document.file && uploadSuccess && <CheckCircle className="h-5 w-5 text-green-500" />}
               <Input className="rounded-lg" value={document.tags?.join(',') || ''} onChange={e => setDocument({ ...document, tags: e.target.value.split(',').map(t => t.trim()) })} placeholder="Tags (comma separated)" />

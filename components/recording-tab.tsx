@@ -43,6 +43,7 @@ import {
   Maximize2,
   Move,
   Settings as SettingsIcon,
+  Trash2,
 } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import AudioVisualizer from "./audio-visualizer"
@@ -74,6 +75,8 @@ import ContextPackManager from './ContextPackManager';
 import { knowledgeGraphService } from '@/lib/services/knowledge-graph-service';
 import { useAuth } from "@/lib/supabase/auth-context"
 import { ContextPackViewer } from './ContextPackViewer';
+import TalkingPoints from './talking-points';
+import { contextService } from '@/lib/services/context-service';
 
 interface HotLinkWidget {
   id: string;
@@ -133,6 +136,7 @@ export default function RecordingTab() {
   const { user } = useAuth()
   const [showContextPack, setShowContextPack] = useState(false)
   const [showContextPackViewer, setShowContextPackViewer] = useState(false)
+  const [talkingPointsContextPack, setTalkingPointsContextPack] = useState<any>(null);
 
   // Core recording state
   const [recordingState, setRecordingState] = useState<RecordingState>("idle")
@@ -418,6 +422,38 @@ Due Date:`,
       clearAnalysis();
       setIsAnalyzing(true);
 
+      // Get relevant chunks for the analysis
+      const { contextPack, relevantChunks } = await contextService.getContextForAnalysis(
+        user?.id || '',
+        'detailed',
+        liveText
+      );
+
+      // Format context information
+      const contextInfo = contextPack ? `
+Context Information:
+Goal: ${contextPack.goal}
+Sub Goals: ${contextPack.subGoals.join(', ')}
+Context Description: ${contextPack.contextDescription}
+Key Topics: ${contextPack.keyTopics.join(', ')}
+User Name:  ${contextPack.name}
+User Role: ${contextPack.userRole}
+Person: ${contextPack.person}
+Relationship: ${contextPack.personRelationship}
+Participants: ${contextPack.participants.map(p => `${p.name} (${p.role}, ${p.relationship_to_user})`).join(', ')}
+${contextPack.timeline ? `Timeline: ${contextPack.timeline.join('\n')}` : ''}
+${contextPack.conflictMap ? `Conflict Map: ${contextPack.conflictMap}` : ''}
+${contextPack.environmentalFactors ? `Environmental Factors: ${contextPack.environmentalFactors}` : ''}
+` : '';
+
+      // Add relevant chunks to the system prompt
+      const chunksInfo = relevantChunks.length > 0 ? `
+Relevant Documents:
+${relevantChunks.map(chunk => 
+  `- ${chunk.content}`
+).join('\n')}
+` : '';
+
       const response = await fetch("/api/requestify", {
         method: "POST",
         headers: {
@@ -426,7 +462,7 @@ Due Date:`,
         body: JSON.stringify({
           transcript: liveText,
           template: {
-            system_prompt: activeProfile.system_prompt,
+            system_prompt: `${activeProfile.system_prompt}\n\n${contextInfo}\n${chunksInfo}`,
             user_prompt: activeProfile.user_prompt,
             template_prompt: activeProfile.template_prompt,
             settings: activeProfile.settings || { model: 'mistralai/mistral-7b-instruct' }
@@ -467,7 +503,7 @@ Due Date:`,
     } finally {
       setIsAnalyzing(false);
     }
-  }, [templateStore.templates, templateStore.activeTemplate, liveText, sessionStore, toast, clearAnalysis]);
+  }, [templateStore.templates, templateStore.activeTemplate, liveText, sessionStore, toast, clearAnalysis, user?.id, settings.contextPackEnabled]);
 
   // Update processContentRef whenever processContent changes
   useEffect(() => {
@@ -1771,6 +1807,20 @@ const updateAnalysisTimer = useCallback(() => {
     }
   };
 
+  useEffect(() => {
+    async function fetchContextPack() {
+      if (settings.contextPackEnabled && user?.id) {
+        const packs = await knowledgeGraphService.getAllContextPacks();
+        const userPacks = packs.filter((p: any) => p.userId === user.id);
+        if (userPacks.length > 0) {
+          userPacks.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          setTalkingPointsContextPack(userPacks[0]);
+        }
+      }
+    }
+    fetchContextPack();
+  }, [settings.contextPackEnabled, user]);
+
   return (
     <div className="space-y-6">
       {/* Show saving overlay when saving */}
@@ -2088,6 +2138,37 @@ const updateAnalysisTimer = useCallback(() => {
                         />
                         <Label htmlFor="interval-toggle" className="text-sm">Auto Analysis</Label>
                       </div>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={async () => {
+                          if (confirm('Are you sure you want to delete all Weaviate data? This action cannot be undone.')) {
+                            try {
+                              const response = await fetch('/api/weaviate/clean', {
+                                method: 'POST'
+                              });
+                              if (!response.ok) {
+                                throw new Error('Failed to clean Weaviate data');
+                              }
+                              toast({
+                                title: "Success",
+                                description: "All Weaviate data has been cleaned",
+                              });
+                            } catch (error) {
+                              toast({
+                                variant: "destructive",
+                                title: "Error",
+                                description: error instanceof Error ? error.message : "Failed to clean Weaviate data",
+                              });
+                            }
+                          }
+                        }}
+                        className="h-8 flex items-center gap-1"
+                        title="Delete all data from Weaviate"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        <span>Clean Weaviate</span>
+                      </Button>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
@@ -3009,16 +3090,35 @@ const updateAnalysisTimer = useCallback(() => {
       />
 
       {/* Add HotLink Settings Button */}
-      <div className="flex justify-end">
-        <Button
-          variant="outline"
-          onClick={() => setShowHotLinkSettings(true)}
-          className="gap-2"
+      {settings.enableDragDrop ? (
+        <DraggableWidget
+          id="hotlink-settings-button"
+          title="HotLink Settings"
+          defaultPosition={{ x: 740, y: 740 }}
+          defaultSize={{ width: 200, height: 40 }}
+          className="w-auto"
         >
-          <SettingsIcon className="h-4 w-4" />
-          HotLink Settings
-        </Button>
-      </div>
+          <Button
+            variant="outline"
+            onClick={() => setShowHotLinkSettings(true)}
+            className="gap-2 w-full h-full"
+          >
+            <SettingsIcon className="h-4 w-4" />
+            HotLink Settings
+          </Button>
+        </DraggableWidget>
+      ) : (
+        <div className="flex justify-end">
+          <Button
+            variant="outline"
+            onClick={() => setShowHotLinkSettings(true)}
+            className="gap-2"
+          >
+            <SettingsIcon className="h-4 w-4" />
+            HotLink Settings
+          </Button>
+        </div>
+      )}
 
       {/* HotLink Settings Dialog */}
       <Dialog open={showHotLinkSettings} onOpenChange={setShowHotLinkSettings}>
@@ -3075,6 +3175,36 @@ const updateAnalysisTimer = useCallback(() => {
           <ContextPackViewer />
         </DialogContent>
       </Dialog>
+
+      {/* Add TalkingPoints as a new widget (draggable if drag and drop is enabled) */}
+      {settings.enableDragDrop ? (
+        <DraggableWidget
+          id="talking-points"
+          title="Talking Points"
+          defaultPosition={{ x: 1200, y: 20 }}
+          defaultSize={{ width: 600, height: 600 }}
+          className="w-full"
+        >
+          <TalkingPoints
+            contextPack={talkingPointsContextPack}
+            transcript={liveText}
+            isRecording={recordingState === "recording"}
+          />
+        </DraggableWidget>
+      ) : (
+        <Card className="overflow-hidden shadow-md mt-6">
+          <div className="flex items-center justify-between p-3 bg-gradient-to-r from-accent/40 to-muted border-b">
+            <span className="font-medium text-sm">Talking Points</span>
+          </div>
+          <div className="p-4">
+            <TalkingPoints
+              contextPack={talkingPointsContextPack}
+              transcript={liveText}
+              isRecording={recordingState === "recording"}
+            />
+          </div>
+        </Card>
+      )}
     </div>
   )
 }

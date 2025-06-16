@@ -127,7 +127,7 @@ const DEFAULT_TEMPLATES: AnalyticsProfile[] = [
       },
     ],
     curiosity_prompt:
-      '[SYSTEM INSTRUCTIONS - DO NOT MODIFY THIS SECTION]\nYou are an expert active listener analyzing meeting transcripts. \nGenerate 2-3 insightful questions that would help understand the context better.\n\n[QUESTION TYPES - DO NOT MODIFY THESE TYPES]\nQuestion types:\n- YES_NO: Simple yes/no questions\n- MULTIPLE_CHOICE: Questions with predefined options (provide 3-4 choices)\n- MULTIPLE_CHOICE_FILL: Multiple choice with an "other" option (provide 3-4 choices)\n- SPEAKER_IDENTIFICATION: Questions about who said specific statements\n- MEETING_TYPE: Questions about the type of meeting/conversation\n\n[CUSTOMIZABLE GUIDELINES - YOU CAN MODIFY THIS SECTION]\nGenerate questions that:\n- Are relevant to the transcript content\n- Help clarify important points\n- Uncover underlying context\n- Are concise and clear\n- Have meaningful multiple choice options when applicable\n\n[OUTPUT FORMAT - DO NOT MODIFY THIS SECTION]\nReturn a JSON array of questions in the following format:\n[\n  {\n    "type": "QUESTION_TYPE",\n    "text": "The question text",\n    "options": ["Option 1", "Option 2", "Option 3"] // Only for MULTIPLE_CHOICE and MULTIPLE_CHOICE_FILL types\n  }\n]',
+      '[SYSTEM INSTRUCTIONS - DO NOT MODIFY THIS SECTION]\nYou are an expert active listener analyzing meeting transcripts. \nGenerate 2-3 insightful questions that would help understand the context better.\n\n[QUESTION TYPES - DO NOT MODIFY THESE TYPES]\nQuestion types:\n- YES_NO: Simple yes/no questions\n- MULTIPLE_CHOICE: Questions with predefined options (provide 3-4 choices)\n- MULTIPLE_CHOICE_FILL: Multiple choice with an "other" option (provide 3-4 choices)\n- SPEAKER_IDENTIFICATION: Questions about who said specific statements\n- MEETING_TYPE: Questions about the type of meeting/conversation\n\n[CUSTOMIZABLE GUIDELINES - YOU CAN MODIFY THIS SECTION]\nGenerate questions that:\n- Are relevant to the transcript content\n- Help clarify important points\n- Uncover underlying context\n- Are concise and clear\n- Have meaningful multiple choice options when applicable\n\n[OUTPUT FORMAT - DO NOT MODIFY THIS SECTION]\nReturn a JSON array of questions in the following format:\n[\n  {\n    "type": "QUESTION_TYPE",\n    "text": "The question text",\n    "options": ["Option 1", "Option 2", "Option 3"] // Only for MULTIPLE_CHOICE and MULTIPLE_CHOICE_FILL types\n  }\n]\n\n[REQUIRED STRUCTURE - DO NOT MODIFY THIS SECTION]\nYou MUST return a valid JSON array of questions. Do not include any other text or explanation. The response must be a valid JSON array with this exact structure:\n[\n  {\n    "id": "q1",\n    "text": "The question text",\n    "type": "yes_no|multiple_choice|multiple_choice_fill|speaker_identification|meeting_type",\n    "options": ["Option 1", "Option 2", "Option 3"] // Only for multiple_choice and multiple_choice_fill types\n  }\n]',
     conversation_mode: "tracking",
     visualization: {
       default_layout: "radial",
@@ -271,14 +271,13 @@ export const useTemplateStore = create<TemplateState>()(
 
         set((state) => ({
           templates: [...state.templates, template],
-          activeTemplate: template.name, // Set as active template
+          activeTemplate: template.name,
         }))
       },
 
       updateTemplate: (name, updates) =>
         set((state) => ({
           templates: state.templates.map((t) => (t.name === name ? { ...t, ...updates } : t)),
-          // Update active template name if it was renamed
           activeTemplate: updates.name && state.activeTemplate === name ? updates.name : state.activeTemplate,
         })),
 
@@ -291,7 +290,6 @@ export const useTemplateStore = create<TemplateState>()(
 
         set((state) => ({
           templates: state.templates.filter((t) => t.name !== name),
-          // If the active template is being deleted, switch to a default
           activeTemplate: state.activeTemplate === name ? "*Meeting Summary" : state.activeTemplate,
         }))
       },

@@ -22,53 +22,74 @@ const AVAILABLE_WIDGETS = [
   {
     id: "live-text",
     name: "Live Text",
-    description: "Display real-time transcription",
-    essential: true, // Cannot be removed
-    icon: "text",
+    description: "Real-time transcription of your speech",
+    icon: "message-square",
+    essential: true
   },
   {
     id: "ai-insights",
     name: "AI Insights",
-    description: "AI-powered analysis of your conversation",
+    description: "AI-powered analysis and suggestions",
     icon: "brain",
+    essential: false
   },
   {
-    id: "conversation-compass-widget",
-    name: "Conversation Compass",
-    description: "Navigate and visualize conversation flow",
-    icon: "compass",
+    id: "bookmarks",
+    name: "Bookmarks",
+    description: "Save and manage important moments",
+    icon: "bookmark",
+    essential: false
   },
   {
-    id: "curiosity-engine-widget",
-    name: "Curiosity Engine",
-    description: "Generate questions based on your conversation",
-    icon: "bulb",
+    id: "audio-controls",
+    name: "Audio Controls",
+    description: "Control recording and playback",
+    icon: "mic",
+    essential: false
   },
   {
     id: "analysis-settings",
     name: "Analysis Settings",
     description: "Configure analysis parameters",
     icon: "settings",
-  },
-  {
-    id: "bookmarks",
-    name: "Bookmarks",
-    description: "Save and organize important moments",
-    icon: "bookmark",
-  },
-  {
-    id: "audio-controls",
-    name: "Audio Controls",
-    description: "Control audio recording and playback",
-    icon: "audio",
+    essential: false
   },
   {
     id: "tags",
     name: "Tags",
-    description: "Categorize and tag your conversations",
+    description: "Manage conversation tags",
     icon: "tag",
+    essential: false
   },
-]
+  {
+    id: "conversation-compass-widget",
+    name: "Conversation Compass",
+    description: "Track conversation flow and direction",
+    icon: "compass",
+    essential: false
+  },
+  {
+    id: "curiosity-engine-widget",
+    name: "Curiosity Engine",
+    description: "Generate questions and insights",
+    icon: "lightbulb",
+    essential: false
+  },
+  {
+    id: "hotlink-settings-button",
+    name: "HotLink Settings",
+    description: "Configure HotLink widgets and triggers",
+    icon: "zap",
+    essential: false
+  },
+  {
+    id: "hotlink-analysis",
+    name: "HotLink Analysis",
+    description: "View real-time analysis of detected hot words",
+    icon: "search",
+    essential: false
+  }
+] as const;
 
 export function WidgetPicker() {
   const { layouts, activeLayoutName, addWidgetToLayout, removeWidgetFromLayout } = useLayoutStore()

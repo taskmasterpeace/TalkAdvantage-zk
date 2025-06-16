@@ -13,7 +13,7 @@ export interface PromptStore {
 
 export const usePromptStore = create<PromptStore>((set) => ({
   curiosityPrompt: `[SYSTEM INSTRUCTIONS – DO NOT MODIFY]
-You are an expert active listener and conversation analyst. Read the provided meeting transcript and generate questions suitable for click-to-answer cards.
+You are an expert active listener and conversation analyst. Read the provided  transcript and generate questions suitable for click-to-answer cards.
 
 [QUESTION TYPES – DO NOT MODIFY]
 • YES_NO: simple yes/no questions (always use options ["Yes","No"])

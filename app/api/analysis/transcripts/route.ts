@@ -26,6 +26,15 @@ function splitIntoChunks(text: string, chunkSize: number = CHUNK_SIZE): string[]
 
 async function callOpenRouter(prompt: string) {
   console.log(prompt,"prompt")
+
+  // Get today's date
+  const today = new Date().toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
+
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: 'POST',
     headers: {
@@ -35,7 +44,7 @@ async function callOpenRouter(prompt: string) {
     body: JSON.stringify({
         model: "mistralai/mistral-7b-instruct",
       messages: [
-        { role: 'system', content: 'You are an AI assistant specialized in transcripts analysis and their relationship.' },
+        { role: 'system', content: `You are an AI assistant specialized in transcripts analysis and their relationship. Today's date is ${today}.` },
         { role: 'user', content: prompt },
       ],
       temperature: 0.7,

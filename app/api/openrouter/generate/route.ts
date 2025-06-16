@@ -2,11 +2,17 @@ import { NextResponse } from "next/server"
 
 export async function POST(request: Request) {
   try {
-    const { prompt, systemPrompt, model, isHotLink = false } = await request.json()
+    const { prompt, systemPrompt, model, isHotLink = false, contextPack } = await request.json()
 
     if (!prompt) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 })
     }
+
+    // Prepare the system prompt with context pack if available
+    let finalSystemPrompt = systemPrompt;
+    // if (contextPack) {
+    //   finalSystemPrompt += `\n\nContext Information:\n${JSON.stringify(contextPack)}`;
+    // }
 
     // Make request to OpenRouter API
     console.log("Making request to OpenRouter API", model)
@@ -23,11 +29,11 @@ export async function POST(request: Request) {
         messages: [
           {
             role: "system",
-            content: systemPrompt
+            content: finalSystemPrompt
           },
           {
             role: "user",
-            content: isHotLink ? prompt : `Generate 2-3 contextual questions about this conversation segment. Include a mix of yes/no, multiple choice, and open-ended questions. Format your response as a JSON array with this structure:
+            content: isHotLink ? prompt+'Everytime Must Use Markdown,bold,bullets formatting for better readability in  response' : `formet must be structure json Generate 2-3 contextual questions about this conversation segment. Include a mix of yes/no, multiple choice, and open-ended questions. Format your response as a JSON array with this structure:
             [
               {
                 "id": "q1",
@@ -74,18 +80,24 @@ export async function POST(request: Request) {
     const questionsText = data.choices[0].message.content
 
     // Try to parse structured data if the response is in JSON format and not from HotLink
-    let structuredQuestions = {}
+    let structuredQuestions = null
     if (!isHotLink) {
       try {
-        structuredQuestions = JSON.parse(questionsText)
+        const parsed = JSON.parse(questionsText)
+        // Validate that we have an array of questions
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          structuredQuestions = parsed
+        } else {
+          console.log("Response is not a valid array of questions")
+        }
       } catch (error) {
-        console.log("Response is not in JSON format, using raw text")
+        console.log("Response is not in JSON format:", error)
       }
     }
 
     return NextResponse.json({
       text: questionsText,
-      structured: structuredQuestions
+      structured: structuredQuestions || null
     })
 
   } catch (error) {

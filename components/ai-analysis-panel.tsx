@@ -25,6 +25,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { knowledgeGraphService } from '@/lib/services/knowledge-graph-service'
+import { useAuth } from '@/lib/supabase/auth-context'
+import { contextService } from '@/lib/services/context-service'
 
 interface AIAnalysisPanelProps {
   transcript: string;
@@ -38,6 +41,7 @@ export default function AIAnalysisPanel({ transcript, analysisResult, isAnalyzin
   const settings = useSettingsStore()
   const templateStore = useTemplateStore()
   const sessionStore = useSessionStore()
+  const { user } = useAuth()
 
   const [internalIsAnalyzing, setInternalIsAnalyzing] = useState(false)
   const [systemPrompt, setSystemPrompt] = useState("You are an AI assistant that provides analysis of conversations from transcripts which ask by user")
@@ -167,8 +171,6 @@ export default function AIAnalysisPanel({ transcript, analysisResult, isAnalyzin
     }
 
     setInternalIsAnalyzing(true)
-    // Do NOT clear the previous analysis result here
-    // setInternalAnalysisResult("")
 
     try {
       // Get the active template
@@ -179,17 +181,62 @@ export default function AIAnalysisPanel({ transcript, analysisResult, isAnalyzin
         throw new Error("No active template found")
       }
 
+      // Get today's date
+      const today = new Date().toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+
       // Use custom prompts if provided, otherwise use template prompts
       const finalSystemPrompt = customSystemPrompt || systemPrompt || activeTemplate.system_prompt
       const finalUserPrompt = customUserPrompt || userPrompt || activeTemplate.user_prompt
 
+      // Get context and relevant chunks for the user prompt
+      const { contextPack, relevantChunks } = await contextService.getContextForAnalysis(
+        user?.id || '',
+        'detailed',
+        finalUserPrompt
+      );
+
+      // Format the context information
+      const contextInfo = contextPack ? `
+      Context Information:
+      
+      Goal: ${contextPack.goal}
+      Sub Goals: ${contextPack.subGoals?.join(', ')}
+      User Name:  ${contextPack.name}
+      User Role: ${contextPack.userRole}
+      Person: ${contextPack.person}
+      Relationship: ${contextPack.personRelationship}
+      
+      Participants:
+      ${contextPack.participants?.map(p => 
+        `- ${p.name} (${p.role}, ${p.relationship_to_user})${p.apex_profile ? `\n  Profile: ${JSON.stringify(p.apex_profile, null, 2)}` : ''}`
+      ).join('\n')}
+      
+      Key Topics: ${contextPack.keyTopics?.join(', ')}
+      Context Description: ${contextPack.contextDescription}
+      Notes: ${contextPack.notes}
+      
+      ${contextPack.timeline?.length ? `Timeline:\n${contextPack.timeline.map(t => `- ${t}`).join('\n')}` : ''}
+      ${contextPack.conflictMap ? `\nConflict Map:\n${contextPack.conflictMap}` : ''}
+      ${contextPack.environmentalFactors ? `\nEnvironmental Factors:\n${contextPack.environmentalFactors}` : ''}
+      
+      Relevant Documents submit:
+      ${relevantChunks?.map(chunk => 
+        `- ${chunk?.content}`
+      ).join('\n')}
+      ` : '';      
+
       console.log('Sending request with:', {
         transcript,
         template: {
-          system_prompt: finalSystemPrompt,
-          user_prompt: finalUserPrompt,
+          system_prompt: `${finalSystemPrompt}\n\nToday's date is ${today}.${contextInfo}`,
+          user_prompt: `${finalUserPrompt}`,
           template_prompt: skipTemplate ? "" : activeTemplate.template_prompt,
-          settings: { model: selectedModel } // Use the locally selected model
+          settings: { model: selectedModel }
         }
       });
 
@@ -202,10 +249,10 @@ export default function AIAnalysisPanel({ transcript, analysisResult, isAnalyzin
         body: JSON.stringify({
           transcript,
           template: {
-            system_prompt: finalSystemPrompt,
-            user_prompt: finalUserPrompt,
+            system_prompt: `${finalSystemPrompt}\n\nToday's date is ${today}.${contextInfo}`,
+            user_prompt: `${finalUserPrompt}`,
             template_prompt: skipTemplate ? "" : activeTemplate.template_prompt,
-            settings: { model: selectedModel } // Use the locally selected model
+            settings: { model: selectedModel }
           }
         })
       })
@@ -248,8 +295,45 @@ export default function AIAnalysisPanel({ transcript, analysisResult, isAnalyzin
       setInternalIsAnalyzing(true);
       setInternalAnalysisResult("");
 
-      const quickSystemPrompt = "You are an AI assistant that provides quick, concise analysis of conversations."
-      const quickUserPrompt = "Analyze the following transcript and provide a concise summary with key points and insights."
+      // Get context for quick analysis
+      const { contextPack, relevantChunks } = await contextService.getContextForAnalysis(
+        user?.id || '',
+        'quick',
+        transcript
+      );
+
+      const quickSystemPrompt = `You are an AI assistant that provides quick, concise analysis of conversations.
+
+Context Information:
+${contextPack ? `
+Goal: ${contextPack.goal}
+Sub Goals: ${contextPack.subGoals.join(', ')}
+User Role: ${contextPack.userRole}
+User Name:  ${contextPack.name}
+Person: ${contextPack.person}
+Relationship: ${contextPack.personRelationship}
+
+Participants:
+${contextPack.participants.map(p => `- ${p.name} (${p.role}, ${p.relationship_to_user})${p.apex_profile ? `\n  Profile: ${JSON.stringify(p.apex_profile)}` : ''}`).join('\n')}
+
+Key Topics: ${contextPack.keyTopics.join(', ')}
+Context Description: ${contextPack.contextDescription}
+Notes: ${contextPack.notes}
+
+${contextPack.timeline ? `Timeline:\n${contextPack.timeline.map(t => `- ${t}`).join('\n')}` : ''}
+${contextPack.conflictMap ? `Conflict Map:\n${contextPack.conflictMap}` : ''}
+${contextPack.environmentalFactors ? `Environmental Factors:\n${contextPack.environmentalFactors}` : ''}
+
+Documents:
+${contextPack.documents.map(d => `- ${d.name}${d.tags ? ` (Tags: ${d.tags.join(', ')})` : ''}`).join('\n')}` : ''}
+
+${relevantChunks.length > 0 ? `\nRelevant Documents:\n${relevantChunks.map(chunk => 
+  `- ${chunk.content}${chunk?.tags ? ` (${chunk.metadata.tags.join(', ')})` : ''}: ${chunk.content}`
+).join('\n')}` : ''}`;
+
+      const quickUserPrompt = `Analyze the following transcript and provide a concise summary with key points and insights:
+
+${transcript}`;
 
       await analyzeTranscript(quickSystemPrompt, quickUserPrompt, true);
     } catch (error) {
@@ -272,16 +356,59 @@ export default function AIAnalysisPanel({ transcript, analysisResult, isAnalyzin
 
       const activeTemplate = templateStore.templates.find((t) => t.name === templateStore.activeTemplate)
 
-    if (!activeTemplate) {
-      toast({
-        variant: "destructive",
-        title: "Template Error",
-        description: "No active template found.",
-      })
-      return
-    }
+      if (!activeTemplate) {
+        toast({
+          variant: "destructive",
+          title: "Template Error",
+          description: "No active template found.",
+        })
+        return
+      }
 
-      await analyzeTranscript('You are an AI assistant specializing . Your role is to:\n1. Extract the most important information from  transcripts\n2. Identify decisions, action items, and responsibilities\n3. Create clear, concise summaries that capture essential details\. Maintain a professional, direct communication style', activeTemplate.user_prompt+'\n\nProvide detailed analysis of the transcript', true);
+      // Get context for detailed analysis
+      const { contextPack, relevantChunks } = await contextService.getContextForAnalysis(
+        user?.id || '',
+        'detailed',
+        transcript
+      );
+
+      const systemPrompt = `You are an AI assistant specializing in detailed analysis. Your role is to:
+1. Extract the most important information from transcripts
+2. Identify decisions, action items, and responsibilities
+3. Create clear, concise summaries that capture essential details
+4. Consider the provided context and relevant documents in your analysis
+
+Context Information:
+
+Goal: ${contextPack.goal}
+Sub Goals: ${contextPack.subGoals?.join(', ') || 'N/A'}
+
+User Role: ${contextPack.userRole}
+User Name:  ${contextPack.name}
+Person: ${contextPack.person}
+Relationship: ${contextPack.personRelationship}
+
+Context Description: ${contextPack.contextDescription}
+Key Topics: ${contextPack.keyTopics?.join(', ') || 'N/A'}
+Timeline:
+${contextPack.timeline?.length ? contextPack.timeline.map(t => `- ${t}`).join('\n') : 'N/A'}
+
+Conflict Map:
+${contextPack.conflictMap || 'N/A'}
+
+Environmental Factors:
+${contextPack.environmentalFactors || 'N/A'}
+
+Participants:
+${contextPack.participants?.map(p => 
+  `- ${p.name} (${p.role}, ${p.relationship_to_user})${p.apex_profile ? `\n  Profile: ${JSON.stringify(p.apex_profile, null, 2)}` : ''}`
+).join('\n') || 'N/A'}
+
+${relevantChunks?.length > 0 ? `
+Relevant Documents:
+${relevantChunks.map(chunk => `- ${chunk.content}`).join('\n')}` : ''}`;
+
+      await analyzeTranscript(systemPrompt, activeTemplate.user_prompt + '\n\nProvide detailed analysis of the transcript', true);
     } catch (error) {
       console.error('Detailed analysis error:', error);
       toast({

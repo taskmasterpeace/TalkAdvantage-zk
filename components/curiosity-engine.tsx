@@ -10,6 +10,8 @@ import { useToast } from "@/hooks/use-toast"
 import { Loader2, Send, ThumbsUp, MessageSquare, RefreshCw, Settings } from "lucide-react"
 import { useSessionStore } from "@/lib/session-store"
 import { useTemplateStore } from "@/lib/template-store"
+import { useAuth } from "@/lib/supabase/auth-context"
+import { knowledgeGraphService } from "@/lib/services/knowledge-graph-service"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,6 +19,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { contextService } from "@/lib/services/context-service"
 
 interface CuriosityEngineProps {
   hasContent: boolean
@@ -37,6 +40,7 @@ export default function CuriosityEngine({ hasContent, transcript, onAnswerSubmit
   const { toast } = useToast()
   const sessionStore = useSessionStore()
   const templateStore = useTemplateStore()
+  const { user } = useAuth()
   
   const [questions, setQuestions] = useState<Question[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
@@ -49,6 +53,7 @@ export default function CuriosityEngine({ hasContent, transcript, onAnswerSubmit
     }
     return 'mistralai/mistral-7b-instruct'
   })
+  const [error, setError] = useState<string | null>(null)
 
   // Save model selection to localStorage whenever it changes
   useEffect(() => {
@@ -175,41 +180,62 @@ Example format:
 
   // Function to generate contextual questions based on transcript
   const generateQuestions = async () => {
-    if (!transcript) {
-      toast({
-        title: "No transcript available",
-        description: "Start recording or wait for content to analyze",
-        variant: "destructive",
-      })
-      return
-    }
-
-    setIsGenerating(true)
+    if (!transcript) return;
 
     try {
-      // Get the active template
-      const activeTemplate:any = templateStore.templates.find(
-        (t) => t.name === templateStore.activeTemplate
-      )
+      setIsGenerating(true);
+      setError(null);
 
-      // Get the system prompt - use default if none found
-      const systemPrompt = activeTemplate?.curiosity_prompt || DEFAULT_CURIOSITY_PROMPT
-      
-      // Get the last 800 characters of transcript, but ensure we don't cut words in half
+      // Get the last 800 characters of the transcript
       const lastChars = transcript.slice(-800)
       const lastComplete = lastChars.slice(lastChars.indexOf(" ") + 1)
 
-      const response = await fetch("/api/openrouter/generate", {
+      // Get context pack and relevant chunks
+      const { contextPack, relevantChunks } = await contextService.getContextForAnalysis(
+        user?.id || '',
+        'chat',
+        lastComplete
+      );
+
+      // Get today's date
+      const today = new Date().toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+
+      // Get the active profile from template store
+      const activeProfile = templateStore.activeTemplate;
+      const activeTemplateName = templateStore.activeTemplate
+      const activeTemplate:any = templateStore.templates.find((t) => t.name === activeTemplateName)
+      // Use the OpenRouter API endpoint with the selected model
+      const response = await fetch('/api/openrouter/generate', {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          prompt: lastComplete,
-          systemPrompt: systemPrompt,
-          model: selectedModel
+          transcript: lastComplete,
+          systemPrompt: `Context Information:
+${contextPack ? `Goal: ${contextPack.goal}
+Context: ${contextPack.contextDescription}
+Key Topics: ${contextPack.keyTopics.join(', ')}` : ''}
+Goal: ${contextPack.goal}
+Sub Goals: ${contextPack.subGoals?.join(', ') || 'N/A'}
+User Role: ${contextPack.userRole}
+User Name:  ${contextPack.name}
+Person: ${contextPack.person}
+Relationship: ${contextPack.personRelationship}
+${relevantChunks.length > 0 ? `\nRelevant Documents:\n${relevantChunks.map(chunk => 
+  `- ${chunk.content}${false? `FALSE` : ''}: ${chunk.content}`
+).join('\n')}` : ''} You are an AI assistant that generates engaging questions based on conversation transcripts. Today's date is ${today}. Please generate questions according to the template provided. If no template is provided, use your knowledge and provide the result in a well-structured format. Use Markdown formatting for better readability`,
+          prompt: `Here is the template:\n\n${activeTemplate?.curiosity_prompt || DEFAULT_CURIOSITY_PROMPT}\n\nHere is the latest transcript:\n\n${lastComplete}`,
+          model: selectedModel,
+          isHotLink: false,
+          contextPack: contextPack
         }),
-      })
+      });
 
       if (!response.ok) {
         const errorData = await response.json()
@@ -257,19 +283,6 @@ Example format:
       setIsGenerating(false)
     }
   }
-
-  // Auto-generate questions periodically during recording
-  useEffect(() => {
-    if (!hasContent || isGenerating) return
-
-    const interval = setInterval(() => {
-      if (transcript && transcript.length > 100) {
-        generateQuestions()
-      }
-    }, 30000) // Generate questions every 30 seconds
-
-    return () => clearInterval(interval)
-  }, [hasContent, transcript, isGenerating])
 
   return (
     <div className="space-y-6">
@@ -354,7 +367,7 @@ Example format:
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {question.type === "yes_no" && (
+                  {question.type?.toLowerCase() === "yes_no" && (
                     <RadioGroup
                       onValueChange={(value) => submitAnswer(question.id, value)}
                       className="flex gap-4"
@@ -370,7 +383,7 @@ Example format:
                     </RadioGroup>
                   )}
 
-                  {question.type === "multiple_choice" && question.options && (
+                  {question.type?.toLowerCase() === "multiple_choice" && question.options && (
                     <RadioGroup
                       onValueChange={(value) => submitAnswer(question.id, value)}
                       className="space-y-2"
@@ -384,7 +397,7 @@ Example format:
                     </RadioGroup>
                   )}
 
-                  {question.type === "free_text" && (
+                  {question.type?.toLowerCase() === "free_text"||question.type?.toLowerCase() === "speaker_identification" && (
                     <div className="flex gap-2">
                       <Input
                         value={inputValues[question.id] || ''}
