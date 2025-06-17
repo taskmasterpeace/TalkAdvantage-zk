@@ -448,7 +448,7 @@ export default function TalkingPoints({ contextPack, transcript, isRecording }: 
 
       {!contextPack && (
         <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md text-yellow-600">
-          No context pack available. Please create one first.
+          No context pack available. Please create one first if already save then please refresh before use.
         </div>
       )}
 

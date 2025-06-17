@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "delete-schema": "ts-node scripts/delete-schema.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.802.0",
