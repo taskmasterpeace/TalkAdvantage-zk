@@ -174,176 +174,20 @@ async function initializeKnowledgeGraphSchema() {
           properties: [
             {
               name: 'name',
-              dataType: ['string'],
-              moduleConfig: {
-                'text2vec-transformers': {
-                  skip: true
-                }
-              }
+              dataType: ['string']
+            },
+            {
+              name: 'type',
+              dataType: ['string']
             },
             {
               name: 'description',
-              dataType: ['string'],
-              moduleConfig: {
-                'text2vec-transformers': {
-                  skip: true
-                }
-              }
-            },
-            {
-              name: 'type',
-              dataType: ['string'],
-              moduleConfig: {
-                'text2vec-transformers': {
-                  skip: true
-                }
-              }
+              dataType: ['text']
             },
             {
               name: 'metadata',
               dataType: ['object'],
-              properties: [
-                {
-                  name: 'data',
-                  dataType: ['text']
-                }
-              ],
-              moduleConfig: {
-                'text2vec-transformers': {
-                  skip: true
-                }
-              }
-            },
-            {
-              name: 'createdAt',
-              dataType: ['date'],
-              moduleConfig: {
-                'text2vec-transformers': {
-                  skip: true
-                }
-              }
-            },
-            {
-              name: 'updatedAt',
-              dataType: ['date'],
-              moduleConfig: {
-                'text2vec-transformers': {
-                  skip: true
-                }
-              }
-            }
-          ]
-        })
-        .do();
-    }
-
-    // Create File class if it doesn't exist
-    const fileClassExists = schema.classes?.some(c => c.class === 'File');
-    if (!fileClassExists) {
-      await client.schema
-        .classCreator()
-        .withClass({
-          class: 'File',
-          vectorizer: 'text2vec-transformers',
-          moduleConfig: {
-            'text2vec-transformers': {
-              vectorizeClassName: false,
-              model: 'sentence-transformers-multi-qa-MiniLM-L6-cos-v1',
-              poolingStrategy: 'masked_mean',
-              inferenceUrl: 'http://t2v-transformers:8080'
-            }
-          },
-          properties: [
-            {
-              name: 'name',
-              dataType: ['string'],
-              moduleConfig: {
-                'text2vec-transformers': {
-                  skip: true
-                }
-              }
-            },
-            {
-              name: 'type',
-              dataType: ['string'],
-              moduleConfig: {
-                'text2vec-transformers': {
-                  skip: true
-                }
-              }
-            },
-            {
-              name: 'personId',
-              dataType: ['string'],
-              moduleConfig: {
-                'text2vec-transformers': {
-                  skip: true
-                }
-              }
-            },
-            {
-              name: 'metadata',
-              dataType: ['object'],
-              properties: [
-                {
-                  name: 'data',
-                  dataType: ['text']
-                }
-              ],
-              moduleConfig: {
-                'text2vec-transformers': {
-                  skip: true
-                }
-              }
-            },
-            {
-              name: 'createdAt',
-              dataType: ['date'],
-              moduleConfig: {
-                'text2vec-transformers': {
-                  skip: true
-                }
-              }
-            },
-            {
-              name: 'updatedAt',
-              dataType: ['date'],
-              moduleConfig: {
-                'text2vec-transformers': {
-                  skip: true
-                }
-              }
-            }
-          ]
-        })
-        .do();
-    }
-
-    // Create Relationship class if it doesn't exist
-    const relationshipClassExists = schema.classes?.some(c => c.class === 'Relationship');
-    if (!relationshipClassExists) {
-      await client.schema
-        .classCreator()
-        .withClass({
-          class: 'Relationship',
-          vectorizer: 'none',
-          properties: [
-            {
-              name: 'source',
-              dataType: ['string']
-            },
-            {
-              name: 'target',
-              dataType: ['string']
-            },
-            {
-              name: 'type',
-              dataType: ['string']
-            },
-            {
-              name: 'properties',
-              dataType: ['object'],
-              properties: [
+              nestedProperties: [
                 {
                   name: 'data',
                   dataType: ['text']
@@ -361,6 +205,107 @@ async function initializeKnowledgeGraphSchema() {
           ]
         })
         .do();
+    }
+
+    // Create File class if it doesn't exist
+    const fileClassExists = schema.classes?.some(c => c.class === 'File');
+    if (!fileClassExists) {
+      await client.schema
+      .classCreator()
+      .withClass({
+        class: 'File',
+        vectorizer: 'text2vec-transformers',
+        moduleConfig: {
+          'text2vec-transformers': {
+            vectorizeClassName: false // Keep this if supported
+          }
+        },
+        properties: [
+          {
+            name: 'name',
+            dataType: ['text']
+          },
+          {
+            name: 'type',
+            dataType: ['text']
+          },
+          {
+            name: 'personId',
+            dataType: ['text']
+          },
+          {
+            name: 'metadata',
+            dataType: ['object'],
+            nestedProperties: [
+              {
+                name: 'data',
+                dataType: ['text']
+              }
+            ]
+          },
+          {
+            name: 'createdAt',
+            dataType: ['date']
+          },
+          {
+            name: 'updatedAt',
+            dataType: ['date']
+          }
+        ]
+      })
+      .do();
+    
+     
+    
+    }
+
+    // Create Relationship class if it doesn't exist
+    const relationshipClassExists = schema.classes?.some(c => c.class === 'Relationship');
+    if (!relationshipClassExists) {
+      await client.schema
+      .classCreator()
+      .withClass({
+        class: 'Relationship',
+        vectorizer: 'none',
+        properties: [
+          {
+            name: 'source',
+            dataType: ['text']
+          },
+          {
+            name: 'target',
+            dataType: ['text']
+          },
+          {
+            name: 'type',
+            dataType: ['text']
+          },
+          {
+            name: 'properties',
+            dataType: ['object'],
+            nestedProperties: [
+              {
+                name: 'key',
+                dataType: ['text']
+              },
+              {
+                name: 'value',
+                dataType: ['text']
+              }
+            ]
+          },
+          {
+            name: 'createdAt',
+            dataType: ['date']
+          },
+          {
+            name: 'updatedAt',
+            dataType: ['date']
+          }
+        ]
+      })
+      .do();
+     
     }
 
     // Create ContextPack class if it doesn't exist
@@ -446,6 +391,11 @@ async function initializeKnowledgeGraphSchema() {
             {
               name: 'participants',
               dataType: ['object[]'],
+              nestedProperties: [
+                { name: 'name', dataType: ['text'] },
+                { name: 'role', dataType: ['text'] },
+                { name: 'relationship_to_user', dataType: ['text'] }
+              ],
               properties: [
                 {
                   name: 'name',
@@ -578,37 +528,58 @@ async function initializeKnowledgeGraphSchema() {
     const documentChunkClassExists = schema.classes?.some(c => c.class === 'DocumentChunk');
     if (!documentChunkClassExists) {
       await client.schema
-        .classCreator()
-        .withClass({
-          class: 'DocumentChunk',
-          description: 'A chunk of a document with vector embeddings',
-          vectorizer: 'text2vec-openai',
-          moduleConfig: {
-            'text2vec-openai': {
-              model: 'ada',
-              modelVersion: '002',
-              type: 'text'
-            }
+      .classCreator()
+      .withClass({
+        class: 'DocumentChunk',
+        description: 'A chunk of a document with vector embeddings',
+        vectorizer: 'text2vec-transformers', // <-- change from 'text2vec-openai'
+        moduleConfig: {
+          'text2vec-transformers': {
+            vectorizeClassName: false
+          }
+        },
+        properties: [
+          {
+            name: 'content',
+            dataType: ['text'],
+            description: 'The content of the document chunk'
           },
-          properties: [
-            {
-              name: 'content',
-              dataType: ['text'],
-              description: 'The content of the document chunk'
-            },
-            {
-              name: 'userId',
-              dataType: ['string'],
-              description: 'ID of the user who owns the document'
-            },
-            {
-              name: 'createdAt',
-              dataType: ['date'],
-              description: 'When the chunk was created'
-            }
-          ]
-        })
-        .do();
+          {
+            name: 'contextPackId',
+            dataType: ['string']
+          },
+          {
+            name: 'chunkIndex',
+            dataType: ['number']
+          },
+          {
+            name: 'userId',
+            dataType: ['string']
+          },
+          {
+            name: 'metadata',
+            dataType: ['object'],
+            nestedProperties: [
+              { name: 'name', dataType: ['text'] },
+              { name: 'file', dataType: ['text'] },
+              { name: 'tags', dataType: ['text[]'] },
+              { name: 'chunkIndex', dataType: ['number'] },
+              { name: 'totalChunks', dataType: ['number'] },
+              { name: 'type', dataType: ['text'] }
+            ]
+          },
+          {
+            name: 'createdAt',
+            dataType: ['date']
+          },
+          {
+            name: 'updatedAt',
+            dataType: ['date']
+          }
+        ]
+      })
+      .do();
+    
     }
 
     console.log('Knowledge graph schema initialized');
@@ -1634,5 +1605,101 @@ export const knowledgeGraphService = {
       console.error('Error getting similar document chunks:', error);
       throw error;
     }
-  }
+  },
+
+  // Cleanup methods
+  async deleteAllDocumentChunks(): Promise<boolean> {
+    await ensureSchemaInitialized();
+    try {
+      await client.batch
+        .objectsBatchDeleter()
+        .withClassName('DocumentChunk')
+        .withWhere({
+          operator: 'NotEqual',
+          path: ['id'],
+          valueString: ''
+        })
+        .do();
+      return true;
+    } catch (error) {
+      console.error('Error deleting all document chunks:', error);
+      throw error;
+    }
+  },
+
+  async deleteAllContextPacks(): Promise<boolean> {
+    await ensureSchemaInitialized();
+    try {
+      await client.batch
+        .objectsBatchDeleter()
+        .withClassName('ContextPack')
+        .withWhere({
+          operator: 'NotEqual',
+          path: ['id'],
+          valueString: ''
+        })
+        .do();
+      return true;
+    } catch (error) {
+      console.error('Error deleting all context packs:', error);
+      throw error;
+    }
+  },
+
+  async deleteAllFiles(): Promise<boolean> {
+    await ensureSchemaInitialized();
+    try {
+      await client.batch
+        .objectsBatchDeleter()
+        .withClassName('File')
+        .withWhere({
+          operator: 'NotEqual',
+          path: ['id'],
+          valueString: ''
+        })
+        .do();
+      return true;
+    } catch (error) {
+      console.error('Error deleting all files:', error);
+      throw error;
+    }
+  },
+
+  async deleteAllRelationships(): Promise<boolean> {
+    await ensureSchemaInitialized();
+    try {
+      await client.batch
+        .objectsBatchDeleter()
+        .withClassName('Relationship')
+        .withWhere({
+          operator: 'NotEqual',
+          path: ['id'],
+          valueString: ''
+        })
+        .do();
+      return true;
+    } catch (error) {
+      console.error('Error deleting all relationships:', error);
+      throw error;
+    }
+  },
+
+  async deleteAllPeople(): Promise<boolean> {
+    await ensureSchemaInitialized();
+    try {
+      await client.batch
+        .objectsBatchDeleter()
+        .withClassName('Person')
+        .withWhere({
+          operator: 'NotEqual',
+          path: ['id'],
+          valueString: ''
+        })
+        .do();
+      return true;
+    } catch (error) {
+      console.error('Error deleting all people:', error);
+      throw error;
+    }
+  },
 }; 
